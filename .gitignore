@@ -1,3 +1,10 @@
 # Python virtual environment
 venv/
 .venv/
+
+# Python Bytecode
+*.pyc
+__pycache__/
+
+# Database and config files
+instance/
