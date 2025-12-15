@@ -5,7 +5,10 @@ import os
 from .extensions import db
 
 def create_app():
-    app = Flask(__name__)
+    # Configure build folders so Flask serves the React build correctly
+    BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build'))
+    STATIC_DIR = os.path.join(BUILD_DIR, 'static')
+    app = Flask(__name__, static_folder=STATIC_DIR, static_url_path='/static', template_folder=BUILD_DIR)
 
     # Ensure the instance folder exists
     try:
