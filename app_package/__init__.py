@@ -23,7 +23,7 @@ def create_app():
     # Initialize extensions
     db.init_app(app)
     
-    # Import models AFTER db is initialized
+    # Import models after db is initialized
     from . import models
     
     # Import and Register Blueprints
@@ -35,6 +35,7 @@ def create_app():
         db.create_all()
         
         from .database import seed_database
-        seed_database()
+        from . import sets
+        seed_database([sets.demo])
 
     return app
