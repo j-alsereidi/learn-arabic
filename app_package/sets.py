@@ -104,22 +104,10 @@ demo = Set(
             translation="the door",
             known=False,
         ),
-        Word(
-            word_id=7,
-            root_id=7,
-            plaintext="مفتوح",
-            translation="open",
-            known=False,
-        ),
         Root(
             root_id=6,
             plaintext="بوب",
             translation="gate, door",
-        ),
-        Root(
-            root_id=7,
-            plaintext="فتح",
-            translation="to open",
         )
     ]
 )

@@ -58,17 +58,6 @@ def api_tables():
         'tables': ['sentences', 'words', 'roots', 'flashcards']
     })
 
-@main.route('/api/wordlists')
-def api_wordlists():
-    """Return grouped word data"""
-    words = Word.query.all()
-    return jsonify([{
-        'word_id': w.word_id,
-        'plaintext': w.plaintext,
-        'translation': w.translation,
-        'frequency': w.frequency
-    } for w in words])
-
 @main.route('/api/languages')
 def api_languages():
     """Return supported languages"""
