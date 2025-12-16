@@ -13,7 +13,8 @@ import {
   XCircle,
   AlertCircle,
   Loader,
-  Globe // Using Globe as a "Translate" style icon substitute if preferred, or Languages
+  ArrowDown, // Added ArrowDown
+  Globe
 } from 'lucide-react';
 
 // --- Components (No change needed for these helper components) ---
@@ -85,6 +86,7 @@ export default function App() {
   const [selectedSentenceId, setSelectedSentenceId] = useState(null);
   const [highlightedWordId, setHighlightedWordId] = useState(null);
   const [translationInput, setTranslationInput] = useState("");
+  const [isTranslating, setIsTranslating] = useState(false); // State for translation loading
   
   // Refs for scrolling
   const wordRefs = useRef({});
@@ -166,6 +168,39 @@ export default function App() {
   const handleSentenceSelect = (s) => {
     setSelectedSentenceId(s.sentence_id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleTranslate = async () => {
+    if (!selectedSentence) return;
+    
+    setIsTranslating(true);
+    try {
+      const response = await fetch('/translate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          q: selectedSentence.plaintext,
+          source: 'ar',
+          target: 'en'
+        }),
+      });
+
+      const data = await response.json();
+      
+      if (data.translatedText) {
+        setTranslationInput(data.translatedText);
+      } else {
+        console.error("Translation failed:", data);
+        alert("Could not translate. Check server logs.");
+      }
+    } catch (error) {
+      console.error("Translation error:", error);
+      alert("Error connecting to translation service.");
+    } finally {
+      setIsTranslating(false);
+    }
   };
 
   // --- Render Helpers ---
@@ -267,6 +302,22 @@ export default function App() {
             </div>
           </div>
           
+          {/* Middle: Translation Button */}
+          <div className="flex justify-center -my-2 z-20">
+            <button 
+              onClick={handleTranslate}
+              disabled={isTranslating}
+              className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-4 py-1.5 rounded-full text-xs font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
+            >
+              {isTranslating ? (
+                <Loader className="w-3 h-3 animate-spin" />
+              ) : (
+                <ArrowDown className="w-3 h-3 group-hover:translate-y-0.5 transition-transform" />
+              )}
+              {isTranslating ? "Translating..." : "Translate"}
+            </button>
+          </div>
+
           {/* 2. Translation Box (Half Height) */}
           <div className="w-full">
             <textarea

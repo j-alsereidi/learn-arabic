@@ -1,6 +1,7 @@
-from flask import Blueprint, render_template, jsonify, send_from_directory
+from flask import Blueprint, render_template, jsonify, send_from_directory, request
 import os
 from .models import Sentence, Word, Root, Flashcard, WordInstance
+from deep_translator import GoogleTranslator
 
 main = Blueprint('main', __name__)
 BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
@@ -64,3 +65,24 @@ def api_languages():
     return jsonify({
         'languages': ['ar', 'en']
     })
+
+@main.route('/translate', methods=['POST'])
+def translate_text():
+    data = request.get_json()
+    text = data.get('q')
+    source_lang = data.get('source', 'ar')
+    target_lang = data.get('target', 'en')
+
+    if not text:
+        return jsonify({'error': 'No text provided'}), 400
+
+    try:
+        # Use deep_translator directly
+        translator = GoogleTranslator(source=source_lang, target=target_lang)
+        translated_text = translator.translate(text)
+        
+        return jsonify({'translatedText': translated_text})
+
+    except Exception as e:
+        print(f"Translation Error: {e}")
+        return jsonify({'error': 'Translation failed', 'details': str(e)}), 500
