@@ -12,7 +12,8 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
-  Loader
+  Loader,
+  Globe // Using Globe as a "Translate" style icon substitute if preferred, or Languages
 } from 'lucide-react';
 
 // --- Components (No change needed for these helper components) ---
@@ -126,13 +127,12 @@ export default function App() {
     fetchData();
   }, []); // Empty dependency array ensures this runs only once on mount
 
-  // Derived State (now uses the 'sentences' state)
+  // Derived State
   const selectedSentence = sentences.find(s => s.sentence_id === selectedSentenceId);
   
   // Tokenize the sentence dynamically
   const sentenceTokens = selectedSentence 
     ? selectedSentence.plaintext.split(' ').map(token => {
-        // Find if this token exists in our words database
         const wordMatch = words.find(w => w.plaintext === token);
         return {
           text: token,
@@ -142,12 +142,15 @@ export default function App() {
       })
     : [];
 
+  // Determine if there are any missing words for the button state
+  const hasMissingWords = sentenceTokens.some(token => !token.wordData);
+
   // Update translation input when a new sentence is selected
   useEffect(() => {
     if (selectedSentence) {
       setTranslationInput(selectedSentence.translation);
     }
-  }, [selectedSentenceId, selectedSentence]); // Added selectedSentence as dependency
+  }, [selectedSentenceId, selectedSentence]);
 
   // Handlers
   const handleWordClick = (wordId) => {
@@ -186,7 +189,6 @@ export default function App() {
       );
     }
     
-    // If not loading and no error, render the editor placeholder if no sentence is selected
     if (!selectedSentence && sentences.length > 0) {
       return (
         <div className="flex flex-col items-center justify-center h-64 text-slate-500 border-2 border-dashed border-slate-800 rounded-xl bg-slate-900/30">
@@ -202,7 +204,7 @@ export default function App() {
         </div>
       );
     }
-    return null; // Let renderSentenceEditor handle the rest
+    return null;
   }
 
   const renderSentenceEditor = () => {
@@ -214,23 +216,14 @@ export default function App() {
         {/* Decorative background glow */}
         <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
 
-        <div className="relative z-10">
-          <div className="flex justify-between items-start mb-6">
-            <div className="flex-1">
-              <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider mb-2">Editing Sentence #{selectedSentence.sentence_id}</h2>
-              {/* Editable Translation */}
-              <input 
-                type="text" 
-                value={translationInput}
-                onChange={(e) => setTranslationInput(e.target.value)}
-                className="bg-slate-950/50 border border-slate-700 text-slate-200 text-sm rounded-lg block w-full p-2.5 focus:ring-indigo-500 focus:border-indigo-500 transition-colors max-w-xl"
-                placeholder="Enter translation..."
-              />
-            </div>
+        <div className="relative z-10 flex flex-col gap-4">
+          
+          <div className="flex justify-between items-center">
+             <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">Editing Sentence #{selectedSentence.sentence_id}</h2>
           </div>
 
-          {/* Interactive Text Area */}
-          <div className="bg-slate-950/50 rounded-lg p-8 min-h-[160px] flex items-center justify-center border border-slate-800 shadow-inner mb-6" dir="rtl">
+          {/* 1. Main Sentence Box (Big) */}
+          <div className="bg-slate-950/50 rounded-lg p-8 min-h-[160px] flex items-center justify-center border border-slate-800 shadow-inner" dir="rtl">
             <div className="flex flex-wrap gap-3 text-4xl leading-relaxed font-arabic text-slate-100">
               {sentenceTokens.map((token, idx) => {
                 const isFound = !!token.wordData;
@@ -262,7 +255,7 @@ export default function App() {
                         px-2 py-1 rounded-md transition-all duration-200 relative
                         ${isFound 
                           ? `cursor-pointer hover:bg-indigo-500/20 hover:text-indigo-300 hover:scale-105 hover:-translate-y-1 ${highlightedWordId === token.wordData?.word_id ? 'bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/50' : ''}`
-                          : 'cursor-help text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-400 decoration-rose-500/30 underline decoration-wavy decoration-2 underline-offset-4'
+                          : 'cursor-help text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-400 decoration-rose-500/30'
                         }
                       `}
                     >
@@ -274,8 +267,18 @@ export default function App() {
             </div>
           </div>
           
+          {/* 2. Translation Box (Half Height) */}
+          <div className="w-full">
+            <textarea
+              value={translationInput}
+              onChange={(e) => setTranslationInput(e.target.value)}
+              className="w-full h-[80px] bg-slate-950/30 border border-slate-800 text-slate-300 text-lg rounded-lg p-4 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors resize-none placeholder:text-slate-600"
+              placeholder="Enter translation here..."
+            />
+          </div>
+          
           {/* Action Footer */}
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800/50">
+          <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800/50 mt-2">
              <div className="flex items-center gap-2 text-slate-500 text-xs">
               <CheckCircle2 className="w-3 h-3 text-emerald-500" />
               <span>Hover words for roots, click to find in table</span>
@@ -286,10 +289,21 @@ export default function App() {
                 <Trash2 className="w-4 h-4" />
                 Delete
               </button>
-              <button className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700">
-                <Plus className="w-4 h-4" />
+              
+              <button 
+                disabled={!hasMissingWords}
+                className={`
+                  flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border
+                  ${hasMissingWords 
+                    ? 'bg-slate-800 hover:bg-slate-700 text-indigo-300 border-slate-700 cursor-pointer shadow-lg shadow-indigo-500/10' 
+                    : 'bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed opacity-50'
+                  }
+                `}
+              >
+                <Languages className="w-4 h-4" />
                 Add Words
               </button>
+              
               <button className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20 active:scale-95">
                 <Save className="w-4 h-4" />
                 Save
