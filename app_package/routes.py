@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, jsonify, send_from_directory, request
+from flask import Blueprint, render_template, jsonify, send_from_directory, request, Response
 import os
 from .models import Sentence, Word, Root, Flashcard, WordInstance
 from .extensions import db
@@ -416,3 +416,41 @@ def create_sentence():
         db.session.rollback()
         print(f"Error creating sentence: {e}")
         return jsonify({'error': str(e)}), 500
+
+@main.route('/api/twilio/webhook', methods=['POST'])
+def twilio_webhook():
+    """
+    Endpoint for Twilio WhatsApp Webhook.
+    Receives incoming message data and creates a new Sentence.
+    """
+    try:
+        # Twilio sends form-encoded data
+        message_body = request.form.get('Body')
+        sender = request.form.get('From')
+
+        if not message_body:
+            return Response("<Response><Message>Error: No text received.</Message></Response>", mimetype='text/xml')
+
+        # Create new sentence
+        new_sentence = Sentence(
+            plaintext=message_body,
+            translation="", # Empty initially
+            complete=False,
+            length=len(message_body.split())
+        )
+        db.session.add(new_sentence)
+        db.session.commit()
+
+        # Respond to Twilio with TwiML
+        response_message = f"Saved sentence: {message_body}"
+        xml_response = f"""
+        <Response>
+            <Message>{response_message}</Message>
+        </Response>
+        """
+        return Response(xml_response, mimetype='text/xml')
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"Twilio Webhook Error: {e}")
+        return Response("<Response><Message>Server Error: Could not save sentence.</Message></Response>", mimetype='text/xml')
