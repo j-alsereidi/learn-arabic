@@ -22,7 +22,6 @@ class Sentence(db.Model):
     sentence_id = db.Column(db.Integer, primary_key=True)
     plaintext = db.Column(db.String, nullable=False)
     translation = db.Column(db.String)
-    source_id = db.Column(db.Integer)
     complete = db.Column(db.Boolean, default=False)
     length = db.Column(db.Integer)
 

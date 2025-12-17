@@ -31,7 +31,6 @@ def api_sentences():
         'sentence_id': s.sentence_id,
         'plaintext': s.plaintext,
         'translation': s.translation,
-        'source_id': s.source_id,
         'complete': s.complete,
         'length': s.length
     } for s in sentences])
@@ -155,6 +154,9 @@ def add_words():
             root_text = item.get('root_plaintext')
             root_trans = item.get('root_translation')
 
+            if not word_text or not root_text:
+                continue
+
             # 1. Check if Root exists
             existing_root = Root.query.filter_by(plaintext=root_text).first()
             
@@ -169,9 +171,9 @@ def add_words():
                 new_roots_count += 1
 
             # 2. Create Word
-            # Basic pruning (removing diacritics) for 'prune' field if needed, 
-            # here just copying plaintext or simple normalization
-            prune_text = re.sub(r'[\u064B-\u065F\u0640]', '', word_text) 
+            # previously: prune_text = re.sub(r'[\u064B-\u065F\u0640]', '', word_text)
+            stemmer.light_stem(word_text)
+            prune_text = stemmer.get_unvocalized()
 
             new_word = Word(
                 root_id=root_id,
@@ -193,7 +195,77 @@ def add_words():
 
     except Exception as e:
         db.session.rollback()
-        print(f"Database Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@main.route('/api/update-word/<int:word_id>', methods=['PUT'])
+def update_word(word_id):
+    data = request.get_json()
+    try:
+        word = Word.query.get(word_id)
+        if not word:
+            return jsonify({'error': 'Word not found'}), 404
+
+        old_root_id = word.root_id
+        
+        # New data
+        new_plaintext = data.get('plaintext')
+        new_translation = data.get('translation')
+        new_root_text = data.get('root_plaintext')
+        new_root_trans = data.get('root_translation')
+
+        # Update word fields
+        word.plaintext = new_plaintext
+        word.translation = new_translation
+        
+        # Update prune
+        stemmer.light_stem(new_plaintext)
+        word.prune = stemmer.get_unvocalized()
+
+        # Handle Root logic
+        # Check if the new root exists
+        existing_root = Root.query.filter_by(plaintext=new_root_text).first()
+        
+        deleted_root = False
+        new_root_created = False
+
+        if existing_root:
+            # Use existing root
+            if word.root_id != existing_root.root_id:
+                word.root_id = existing_root.root_id
+        else:
+            # Create new root
+            new_root = Root(plaintext=new_root_text, translation=new_root_trans)
+            db.session.add(new_root)
+            db.session.flush()
+            word.root_id = new_root.root_id
+            new_root_created = True
+
+        # Flush to save word changes so we can check for orphans
+        db.session.flush()
+
+        # Check if old root is orphaned (only if we changed roots)
+        if old_root_id != word.root_id:
+            remaining_count = Word.query.filter_by(root_id=old_root_id).count()
+            if remaining_count == 0:
+                old_root = Root.query.get(old_root_id)
+                if old_root:
+                    db.session.delete(old_root)
+                    deleted_root = True
+
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'new_root_created': new_root_created,
+            'deleted_root': deleted_root
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 # Sentence/Word Deletion Endpoints
@@ -281,7 +353,6 @@ def create_sentence():
         new_sentence = Sentence(
             plaintext=data.get('plaintext'),
             translation=data.get('translation'),
-            source_id=1, # Default source
             complete=False,
             length=len(data.get('plaintext', '').split())
         )

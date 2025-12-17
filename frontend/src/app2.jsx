@@ -284,20 +284,36 @@ export default function App() {
 
     setIsProcessingWords(true);
     try {
-      const payload = {
-        items: [{
-          plaintext: editingWord,
-          translation: editingWordTrans,
-          root_plaintext: editingRoot,
-          root_translation: editingRootTrans
-        }]
-      };
-
-      const response = await fetch('/add-words', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      let response;
+      
+      // If editing an existing word, use update-word endpoint
+      if (editingWordId) {
+        response = await fetch(`/api/update-word/${editingWordId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                plaintext: editingWord,
+                translation: editingWordTrans,
+                root_plaintext: editingRoot,
+                root_translation: editingRootTrans
+            })
+        });
+      } else {
+        // Create new word logic
+        const payload = {
+            items: [{
+            plaintext: editingWord,
+            translation: editingWordTrans,
+            root_plaintext: editingRoot,
+            root_translation: editingRootTrans
+            }]
+        };
+        response = await fetch('/add-words', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+      }
       
       if (!response.ok) {
         const errData = await response.json();
@@ -307,8 +323,11 @@ export default function App() {
       const result = await response.json();
 
       if (result.success) {
-        if (result.new_roots_count > 0) {
-          setNewRootsCount(result.new_roots_count);
+        if (result.new_roots_count > 0 || result.new_root_created) {
+          setNewRootsCount(prev => prev + 1);
+        }
+        if (result.deleted_root) {
+            setDeletedRootsCount(prev => prev + 1);
         }
         await fetchData();
         setIsEditingWord(false);
@@ -947,7 +966,7 @@ export default function App() {
                       <table className="w-full text-left border-collapse">
                         <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
                           <tr>
-                            {['ID', 'Plaintext', 'Translation', 'Source', 'Length', 'Complete'].map(h => (
+                            {['ID', 'Plaintext', 'Translation', 'Length', 'Complete'].map(h => (
                               <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
                             ))}
                           </tr>
@@ -963,7 +982,6 @@ export default function App() {
                                 { key: 'sentence_id', render: d => <span className="font-mono text-slate-500">#{d.sentence_id}</span> },
                                 { key: 'plaintext', isArabic: true },
                                 { key: 'translation' },
-                                { key: 'source_id', render: d => <span className="font-mono text-slate-400">SRC-{d.source_id}</span> },
                                 { key: 'length', render: d => <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-400">{d.length} words</span> },
                                 { key: 'complete', render: d => (
                                   <div className="flex items-center gap-2">

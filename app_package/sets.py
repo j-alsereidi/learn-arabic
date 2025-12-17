@@ -13,7 +13,6 @@ demo = Set(
             sentence_id=1,
             plaintext="مرحبا بالعالم",
             translation="Hello, world",
-            source_id=1,
             complete=False,
             length=2
         ),
@@ -47,7 +46,6 @@ demo = Set(
             sentence_id=2,
             plaintext="أدرس اللغة العربية",
             translation="I am studying the Arabic language",
-            source_id=1,
             complete=False,
             length=3
         ),
@@ -93,7 +91,6 @@ demo = Set(
             sentence_id=3,
             plaintext="الباب مفتوح",
             translation="The door is open",
-            source_id=1,
             complete=False,
             length=2
         ),
