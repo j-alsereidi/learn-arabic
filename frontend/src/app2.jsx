@@ -15,7 +15,8 @@ import {
   Loader,
   ArrowDown,
   Check,
-  X
+  X,
+  CopyPlus
 } from 'lucide-react';
 
 // --- Components ---
@@ -80,6 +81,10 @@ export default function App() {
   const [translationInput, setTranslationInput] = useState("");
   const [isTranslating, setIsTranslating] = useState(false);
   
+  // Sentence Editing State
+  const [isEditingSentence, setIsEditingSentence] = useState(false);
+  const [editingSentenceText, setEditingSentenceText] = useState("");
+
   // Staging / Adding Words State
   const [isStaging, setIsStaging] = useState(false);
   const [isProcessingWords, setIsProcessingWords] = useState(false);
@@ -89,7 +94,6 @@ export default function App() {
 
   // Word Editor State
   const [isEditingWord, setIsEditingWord] = useState(false);
-  // We need to track the ID if we are editing an EXISTING word to allow deletion
   const [editingWordId, setEditingWordId] = useState(null); 
   const [editingWord, setEditingWord] = useState("");
   const [editingRoot, setEditingRoot] = useState("");
@@ -116,9 +120,21 @@ export default function App() {
       setSentences(sData);
       setWords(wData);
       setRoots(rData);
-      if (sData.length > 0 && !selectedSentenceId) {
-        setSelectedSentenceId(sData[0].sentence_id);
+      
+      // Keep selected sentence valid or default to first
+      if (sData.length > 0) {
+          if (selectedSentenceId) {
+             // ensure ID still exists (e.g. after deletion elsewhere)
+             if(!sData.find(s => s.sentence_id === selectedSentenceId)) {
+                 setSelectedSentenceId(sData[0].sentence_id);
+             }
+          } else {
+             setSelectedSentenceId(sData[0].sentence_id);
+          }
+      } else {
+          setSelectedSentenceId(null);
       }
+
     } catch (err) {
       console.error("Error fetching data:", err);
       setError("Failed to load data.");
@@ -149,7 +165,13 @@ export default function App() {
   const hasMissingWords = missingWords.length > 0;
 
   useEffect(() => {
-    if (selectedSentence) setTranslationInput(selectedSentence.translation);
+    if (selectedSentence) {
+        setTranslationInput(selectedSentence.translation);
+        if (isEditingSentence) {
+             // If we switch sentences while editing (unlikely but safe), update text
+             setEditingSentenceText(selectedSentence.plaintext);
+        }
+    }
   }, [selectedSentenceId, selectedSentence]);
 
   // --- Animation Effects ---
@@ -200,18 +222,21 @@ export default function App() {
   };
 
   const handleSentenceSelect = (s) => {
+    setIsEditingSentence(false); // Exit edit mode when switching
     setSelectedSentenceId(s.sentence_id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleTranslateSentence = async () => {
-    if (!selectedSentence) return;
+    const textToTranslate = isEditingSentence ? editingSentenceText : selectedSentence?.plaintext;
+    if (!textToTranslate) return;
+
     setIsTranslating(true);
     try {
       const response = await fetch('/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: selectedSentence.plaintext }),
+        body: JSON.stringify({ q: textToTranslate }),
       });
       const data = await response.json();
       if (data.translatedText) setTranslationInput(data.translatedText);
@@ -367,8 +392,7 @@ export default function App() {
     try {
         const response = await fetch(`/api/delete-sentence/${selectedSentenceId}`, { method: 'DELETE' });
         if (response.ok) {
-            await fetchData();
-            setSelectedSentenceId(null); // Clear selection
+            await fetchData(); // Will re-select first sentence automatically
         } else {
             alert("Failed to delete sentence.");
         }
@@ -401,6 +425,58 @@ export default function App() {
     }
   };
 
+  // --- SENTENCE EDIT HANDLERS ---
+
+  const handleEditSentenceClick = () => {
+    setIsEditingSentence(true);
+    setEditingSentenceText(selectedSentence.plaintext);
+  };
+
+  const handleUpdateSentence = async () => {
+    try {
+        const response = await fetch(`/api/update-sentence/${selectedSentenceId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                plaintext: editingSentenceText,
+                translation: translationInput
+            })
+        });
+        if (response.ok) {
+            setIsEditingSentence(false);
+            await fetchData();
+        } else {
+            alert("Failed to update sentence.");
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error updating sentence");
+    }
+  };
+
+  const handleCreateSentence = async () => {
+    try {
+        const response = await fetch('/api/create-sentence', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                plaintext: editingSentenceText,
+                translation: translationInput
+            })
+        });
+        const result = await response.json();
+        if (result.success) {
+            setIsEditingSentence(false);
+            await fetchData();
+            setSelectedSentenceId(result.sentence_id); // Switch to new sentence
+        } else {
+            alert("Failed to create sentence.");
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error creating sentence");
+    }
+  };
 
   // --- Render Helpers ---
 
@@ -472,7 +548,6 @@ export default function App() {
           </div>
 
           <div className="flex justify-between gap-3 pt-4 border-t border-slate-800/50">
-            {/* Delete Button - Only shown if editing existing word */}
             <button 
                 onClick={handleDeleteWord}
                 disabled={!editingWordId}
@@ -595,50 +670,75 @@ export default function App() {
 
         <div className="relative z-10 flex flex-col gap-4">
           <div className="flex justify-between items-center">
-             <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">Editing Sentence #{selectedSentence.sentence_id}</h2>
+             <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">
+               {isEditingSentence ? "Editing Sentence Text" : `Editing Sentence #${selectedSentence.sentence_id}`}
+             </h2>
+             
+             {/* EDIT MODE TOGGLE BUTTON */}
+             {!isEditingSentence && (
+                 <button 
+                    onClick={handleEditSentenceClick}
+                    className="flex items-center gap-2 text-indigo-400 hover:text-indigo-300 text-xs font-bold uppercase tracking-wide transition-colors"
+                 >
+                    <Edit3 className="w-4 h-4" />
+                    Edit Text
+                 </button>
+             )}
           </div>
 
           <div className="bg-slate-950/50 rounded-lg p-8 min-h-[160px] flex items-center justify-center border border-slate-800 shadow-inner" dir="rtl">
-            <div className="flex flex-wrap gap-3 text-4xl leading-relaxed font-arabic text-slate-100">
-              {sentenceTokens.map((token, idx) => {
-                const isFound = !!token.wordData;
-                return (
-                  <Tooltip 
-                    key={idx} 
-                    content={
-                      <div className="text-center min-w-[80px]">
-                        {isFound ? (
-                          <>
-                            <div className="font-bold text-indigo-300 mb-1">{token.rootData?.plaintext || "No Root"}</div>
-                            <div className="text-slate-300">{token.rootData?.translation}</div>
-                          </>
-                        ) : (
-                          <div className="text-rose-400 font-medium flex items-center justify-center gap-1">
-                            <AlertCircle className="w-3 h-3" />
-                            Not found
-                          </div>
-                        )}
-                      </div>
-                    }
-                  >
-                    <span
-                      onClick={() => handleWordClick(token.wordData?.word_id, token.text)}
-                      onMouseEnter={() => isFound && setHighlightedWordId(token.wordData.word_id)}
-                      onMouseLeave={() => setHighlightedWordId(null)}
-                      className={`
-                        px-2 py-1 rounded-md transition-all duration-200 relative
-                        ${isFound 
-                          ? `cursor-pointer hover:bg-indigo-500/20 hover:text-indigo-300 hover:scale-105 hover:-translate-y-1 ${highlightedWordId === token.wordData?.word_id ? 'bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/50' : ''}`
-                          : 'cursor-pointer text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-400 decoration-rose-500/30'
+            {isEditingSentence ? (
+                /* EDIT MODE: TEXTAREA */
+                <textarea 
+                    value={editingSentenceText}
+                    onChange={(e) => setEditingSentenceText(e.target.value)}
+                    className="w-full bg-transparent text-4xl leading-relaxed font-arabic text-slate-100 text-center outline-none border-none resize-none focus:ring-0"
+                    placeholder="Type sentence here..."
+                    autoFocus
+                />
+            ) : (
+                /* VIEW MODE: INTERACTIVE TOKENS */
+                <div className="flex flex-wrap gap-3 text-4xl leading-relaxed font-arabic text-slate-100">
+                {sentenceTokens.map((token, idx) => {
+                    const isFound = !!token.wordData;
+                    return (
+                    <Tooltip 
+                        key={idx} 
+                        content={
+                        <div className="text-center min-w-[80px]">
+                            {isFound ? (
+                            <>
+                                <div className="font-bold text-indigo-300 mb-1">{token.rootData?.plaintext || "No Root"}</div>
+                                <div className="text-slate-300">{token.rootData?.translation}</div>
+                            </>
+                            ) : (
+                            <div className="text-rose-400 font-medium flex items-center justify-center gap-1">
+                                <AlertCircle className="w-3 h-3" />
+                                Not found
+                            </div>
+                            )}
+                        </div>
                         }
-                      `}
                     >
-                      {token.text}
-                    </span>
-                  </Tooltip>
-                );
-              })}
-            </div>
+                        <span
+                        onClick={() => handleWordClick(token.wordData?.word_id, token.text)}
+                        onMouseEnter={() => isFound && setHighlightedWordId(token.wordData.word_id)}
+                        onMouseLeave={() => setHighlightedWordId(null)}
+                        className={`
+                            px-2 py-1 rounded-md transition-all duration-200 relative
+                            ${isFound 
+                            ? `cursor-pointer hover:bg-indigo-500/20 hover:text-indigo-300 hover:scale-105 hover:-translate-y-1 ${highlightedWordId === token.wordData?.word_id ? 'bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/50' : ''}`
+                            : 'cursor-pointer text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-400 decoration-rose-500/30'
+                            }
+                        `}
+                        >
+                        {token.text}
+                        </span>
+                    </Tooltip>
+                    );
+                })}
+                </div>
+            )}
           </div>
           
           <div className="flex justify-center -my-2 z-20">
@@ -662,40 +762,70 @@ export default function App() {
           </div>
           
           <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800/50 mt-2">
-             <div className="flex items-center gap-2 text-slate-500 text-xs">
-              <CheckCircle2 className="w-3 h-3 text-emerald-500" />
-              <span>Hover words for roots, click to find in table</span>
-            </div>
+            {isEditingSentence ? (
+                /* EDIT MODE FOOTER */
+                <>
+                    <button 
+                        onClick={() => setIsEditingSentence(false)}
+                        className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
+                    >
+                        Cancel
+                    </button>
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={handleCreateSentence}
+                            className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg shadow-purple-500/20 transition-all active:scale-95"
+                        >
+                            <CopyPlus className="w-4 h-4" />
+                            Save New
+                        </button>
+                        <button 
+                            onClick={handleUpdateSentence}
+                            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg shadow-emerald-500/20 transition-all active:scale-95"
+                        >
+                            <CheckCircle2 className="w-4 h-4" />
+                            Confirm & Save
+                        </button>
+                    </div>
+                </>
+            ) : (
+                /* VIEW MODE FOOTER */
+                <>
+                    <div className="flex items-center gap-2 text-slate-500 text-xs">
+                        {/* <span>Tip: Click 'Edit Text' above to modify.</span> */}
+                        <button 
+                            onClick={handleDeleteSentence}
+                            className="flex items-center gap-2 bg-slate-800 hover:bg-rose-900/30 hover:text-rose-400 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+                        >
+                            <Trash2 className="w-4 h-4" />
+                            Delete
+                        </button>
+                    </div>
 
-            <div className="flex gap-2">
-              <button 
-                onClick={handleDeleteSentence}
-                className="flex items-center gap-2 bg-slate-800 hover:bg-rose-900/30 hover:text-rose-400 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete
-              </button>
-              
-              <button 
-                onClick={handleAddWordsClick}
-                disabled={!hasMissingWords || isProcessingWords}
-                className={`
-                  flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border
-                  ${hasMissingWords && !isProcessingWords
-                    ? 'bg-slate-800 hover:bg-slate-700 text-indigo-300 border-slate-700 cursor-pointer shadow-lg shadow-indigo-500/10' 
-                    : 'bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed opacity-50'
-                  }
-                `}
-              >
-                {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <Languages className="w-4 h-4" />}
-                Add Words
-              </button>
-              
-              <button className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20 active:scale-95">
-                <Save className="w-4 h-4" />
-                Save
-              </button>
-            </div>
+                    <div className="flex gap-2">
+                        
+                        <button 
+                            onClick={handleAddWordsClick}
+                            disabled={!hasMissingWords || isProcessingWords}
+                            className={`
+                            flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border
+                            ${hasMissingWords && !isProcessingWords
+                                ? 'bg-slate-800 hover:bg-slate-700 text-indigo-300 border-slate-700 cursor-pointer shadow-lg shadow-indigo-500/10' 
+                                : 'bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed opacity-50'
+                            }
+                            `}
+                        >
+                            {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <Languages className="w-4 h-4" />}
+                            Add Words
+                        </button>
+                        
+                        <button className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20 active:scale-95">
+                            <Save className="w-4 h-4" />
+                            Save
+                        </button>
+                    </div>
+                </>
+            )}
           </div>
         </div>
       </div>

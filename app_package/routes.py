@@ -196,7 +196,7 @@ def add_words():
         print(f"Database Error: {e}")
         return jsonify({'error': str(e)}), 500
 
-# Endpoints for Deleting
+# Sentence/Word Deletion Endpoints
 
 @main.route('/api/delete-sentence/<int:sentence_id>', methods=['DELETE'])
 def delete_sentence(sentence_id):
@@ -251,4 +251,48 @@ def delete_word(word_id):
     except Exception as e:
         db.session.rollback()
         print(f"Error deleting word: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# --- Sentence Edit Endpoints ---
+
+@main.route('/api/update-sentence/<int:sentence_id>', methods=['PUT'])
+def update_sentence(sentence_id):
+    data = request.get_json()
+    try:
+        sentence = Sentence.query.get(sentence_id)
+        if not sentence:
+            return jsonify({'error': 'Sentence not found'}), 404
+        
+        sentence.plaintext = data.get('plaintext', sentence.plaintext)
+        sentence.translation = data.get('translation', sentence.translation)
+        sentence.length = len(sentence.plaintext.split())
+        
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error updating sentence: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@main.route('/api/create-sentence', methods=['POST'])
+def create_sentence():
+    data = request.get_json()
+    try:
+        new_sentence = Sentence(
+            plaintext=data.get('plaintext'),
+            translation=data.get('translation'),
+            source_id=1, # Default source
+            complete=False,
+            length=len(data.get('plaintext', '').split())
+        )
+        db.session.add(new_sentence)
+        db.session.commit()
+        
+        return jsonify({
+            'success': True, 
+            'sentence_id': new_sentence.sentence_id
+        })
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error creating sentence: {e}")
         return jsonify({'error': str(e)}), 500
