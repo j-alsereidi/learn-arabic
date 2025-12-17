@@ -9,6 +9,8 @@ import re
 main = Blueprint('main', __name__)
 BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
 
+stemmer = ArabicLightStemmer()
+
 @main.route('/', defaults={'path': ''})
 @main.route('/<path:path>')
 def serve(path):
@@ -107,7 +109,6 @@ def suggest_words():
             # 1. Stem to get Root
             # Note: Tashaphyne might return multiple roots or need specific handling
             # simplistic approach:
-            stemmer = ArabicLightStemmer()
             stemmer.light_stem(word_text)
             root_text = stemmer.get_root()
             
@@ -193,4 +194,61 @@ def add_words():
     except Exception as e:
         db.session.rollback()
         print(f"Database Error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Endpoints for Deleting
+
+@main.route('/api/delete-sentence/<int:sentence_id>', methods=['DELETE'])
+def delete_sentence(sentence_id):
+    try:
+        sentence = Sentence.query.get(sentence_id)
+        if not sentence:
+            return jsonify({'error': 'Sentence not found'}), 404
+        
+        # Deleting sentence does NOT delete words (as requested)
+        db.session.delete(sentence)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Sentence deleted'})
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error deleting sentence: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@main.route('/api/delete-word/<int:word_id>', methods=['DELETE'])
+def delete_word(word_id):
+    try:
+        # Find word by plaintext to handle duplicates if schema allowed, 
+        # but here we use ID so it is specific. 
+        # Ideally we want to delete this specific Word instance.
+        word = Word.query.get(word_id)
+        if not word:
+            return jsonify({'error': 'Word not found'}), 404
+        
+        root_id = word.root_id
+        
+        # Delete the word
+        db.session.delete(word)
+        db.session.flush() # Flush to update DB state before checking counts
+
+        # Check if root is orphaned
+        deleted_root = False
+        remaining_words_count = Word.query.filter_by(root_id=root_id).count()
+        
+        if remaining_words_count == 0:
+            root = Root.query.get(root_id)
+            if root:
+                db.session.delete(root)
+                deleted_root = True
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Word deleted', 
+            'deleted_root': deleted_root
+        })
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error deleting word: {e}")
         return jsonify({'error': str(e)}), 500

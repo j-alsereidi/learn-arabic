@@ -84,10 +84,13 @@ export default function App() {
   const [isStaging, setIsStaging] = useState(false);
   const [isProcessingWords, setIsProcessingWords] = useState(false);
   const [stagedWords, setStagedWords] = useState([]);
-  const [newRootsCount, setNewRootsCount] = useState(0); // For animation
+  const [newRootsCount, setNewRootsCount] = useState(0); // For green add animation
+  const [deletedRootsCount, setDeletedRootsCount] = useState(0); // For red delete animation
 
   // Word Editor State
   const [isEditingWord, setIsEditingWord] = useState(false);
+  // We need to track the ID if we are editing an EXISTING word to allow deletion
+  const [editingWordId, setEditingWordId] = useState(null); 
   const [editingWord, setEditingWord] = useState("");
   const [editingRoot, setEditingRoot] = useState("");
   const [editingWordTrans, setEditingWordTrans] = useState("");
@@ -149,18 +152,24 @@ export default function App() {
     if (selectedSentence) setTranslationInput(selectedSentence.translation);
   }, [selectedSentenceId, selectedSentence]);
 
-  // --- Animation Effect ---
+  // --- Animation Effects ---
   useEffect(() => {
     if (newRootsCount > 0) {
-      const timer = setTimeout(() => setNewRootsCount(0), 3000); // Reset after 3s
+      const timer = setTimeout(() => setNewRootsCount(0), 3000);
       return () => clearTimeout(timer);
     }
   }, [newRootsCount]);
 
+  useEffect(() => {
+    if (deletedRootsCount > 0) {
+      const timer = setTimeout(() => setDeletedRootsCount(0), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [deletedRootsCount]);
+
   // --- Handlers ---
 
   const handleWordClick = (wordId, tokenText) => {
-    // If wordId exists (known word), act as before
     if (wordId) {
       setActiveTab('words');
       setHighlightedWordId(wordId);
@@ -168,13 +177,26 @@ export default function App() {
         wordRefs.current[wordId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 100);
     } else {
-      // Not found word clicked - Open Word Editor
+      // Create Mode
       setIsEditingWord(true);
+      setEditingWordId(null); // No ID because it's new
       setEditingWord(tokenText);
       setEditingRoot("");
       setEditingWordTrans("");
       setEditingRootTrans("");
     }
+  };
+
+  const handleTableWordClick = (word) => {
+    // Edit Mode
+    const root = roots.find(r => r.root_id === word.root_id);
+    setIsEditingWord(true);
+    setEditingWordId(word.word_id); // Capture ID for deletion
+    setEditingWord(word.plaintext);
+    setEditingRoot(root ? root.plaintext : "");
+    setEditingWordTrans(word.translation);
+    setEditingRootTrans(root ? root.translation : "");
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSentenceSelect = (s) => {
@@ -203,7 +225,6 @@ export default function App() {
   const handleTranslateWordEditor = async () => {
     setIsTranslatingWord(true);
     try {
-      // Translate Word
       const wRes = await fetch('/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -212,7 +233,6 @@ export default function App() {
       const wData = await wRes.json();
       if (wData.translatedText) setEditingWordTrans(wData.translatedText);
 
-      // Translate Root if provided
       if (editingRoot) {
         const rRes = await fetch('/translate', {
           method: 'POST',
@@ -276,7 +296,6 @@ export default function App() {
 
   const handleAddWordsClick = async () => {
     if (missingWords.length === 0) return;
-    
     setIsProcessingWords(true);
     try {
       const response = await fetch('/suggest-words', {
@@ -339,6 +358,50 @@ export default function App() {
     }
   };
 
+  // --- DELETE HANDLERS ---
+
+  const handleDeleteSentence = async () => {
+    if (!selectedSentenceId) return;
+    if (!window.confirm("Are you sure you want to delete this sentence? The words will remain.")) return;
+    
+    try {
+        const response = await fetch(`/api/delete-sentence/${selectedSentenceId}`, { method: 'DELETE' });
+        if (response.ok) {
+            await fetchData();
+            setSelectedSentenceId(null); // Clear selection
+        } else {
+            alert("Failed to delete sentence.");
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error deleting sentence");
+    }
+  };
+
+  const handleDeleteWord = async () => {
+    if (!editingWordId) return; // Can't delete a new word that isn't saved yet
+    if (!window.confirm("Are you sure you want to delete this word? If it's the last word for its root, the root will also be deleted.")) return;
+
+    try {
+        const response = await fetch(`/api/delete-word/${editingWordId}`, { method: 'DELETE' });
+        const result = await response.json();
+        
+        if (result.success) {
+            if (result.deleted_root) {
+                setDeletedRootsCount(prev => prev + 1);
+            }
+            await fetchData();
+            setIsEditingWord(false);
+        } else {
+            alert("Failed to delete word: " + result.error);
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error deleting word");
+    }
+  };
+
+
   // --- Render Helpers ---
 
   const renderWordEditor = () => (
@@ -346,14 +409,15 @@ export default function App() {
        <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
        <div className="relative z-10 flex flex-col gap-6">
           <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-             <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">Adding New Word</h2>
+             <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">
+               {editingWordId ? "Editing Existing Word" : "Adding New Word"}
+             </h2>
              <button onClick={() => setIsEditingWord(false)} className="text-slate-500 hover:text-white transition-colors">
                <X className="w-5 h-5" />
              </button>
           </div>
 
           <div className="flex flex-col gap-4">
-            {/* Top Row: Word & Root Inputs */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs text-slate-500 font-bold mb-1 block">WORD (ARABIC)</label>
@@ -374,7 +438,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Translate Button */}
             <div className="flex justify-center">
               <button 
                 onClick={handleTranslateWordEditor}
@@ -386,7 +449,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Bottom Row: Translations */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-xs text-slate-500 font-bold mb-1 block">TRANSLATION</label>
@@ -409,21 +471,35 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex justify-end gap-3 pt-4 border-t border-slate-800/50">
+          <div className="flex justify-between gap-3 pt-4 border-t border-slate-800/50">
+            {/* Delete Button - Only shown if editing existing word */}
             <button 
-              onClick={() => setIsEditingWord(false)}
-              className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
+                onClick={handleDeleteWord}
+                disabled={!editingWordId}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700 
+                    ${editingWordId ? 'bg-slate-800 hover:bg-rose-900/30 hover:text-rose-400 text-slate-300' : 'bg-slate-900 text-slate-700 cursor-not-allowed'}
+                `}
             >
-              Cancel
+               <Trash2 className="w-4 h-4" />
+               Delete
             </button>
-            <button 
-              onClick={handleConfirmWordEditor}
-              disabled={isProcessingWords}
-              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg text-sm font-medium shadow-lg shadow-emerald-500/20 transition-all active:scale-95 disabled:opacity-50"
-            >
-              {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              Confirm & Save
-            </button>
+
+            <div className="flex gap-3">
+              <button 
+                onClick={() => setIsEditingWord(false)}
+                className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleConfirmWordEditor}
+                disabled={isProcessingWords}
+                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg text-sm font-medium shadow-lg shadow-emerald-500/20 transition-all active:scale-95 disabled:opacity-50"
+              >
+                {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                Confirm & Save
+              </button>
+            </div>
           </div>
        </div>
     </div>
@@ -468,7 +544,6 @@ export default function App() {
               `}
               onClick={() => handleToggleStagedWord(idx)}
             >
-              {/* Checkbox Overlay */}
               <div className={`
                 absolute top-3 right-3 w-6 h-6 rounded-full flex items-center justify-center transition-colors
                 ${item.checked ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-400'}
@@ -477,7 +552,6 @@ export default function App() {
               </div>
 
               <div className="space-y-4 pr-8">
-                {/* Word Section */}
                 <div>
                   <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">New Word</div>
                   <div className="text-2xl font-arabic text-slate-200 mb-1" dir="rtl">{item.plaintext}</div>
@@ -486,7 +560,6 @@ export default function App() {
                 
                 <div className="h-px bg-slate-700/50 w-full" />
 
-                {/* Root Section */}
                 <div>
                   <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Root</div>
                   <div className="text-xl font-arabic text-slate-300 mb-1" dir="rtl">{item.root_plaintext}</div>
@@ -525,7 +598,6 @@ export default function App() {
              <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">Editing Sentence #{selectedSentence.sentence_id}</h2>
           </div>
 
-          {/* Main Text */}
           <div className="bg-slate-950/50 rounded-lg p-8 min-h-[160px] flex items-center justify-center border border-slate-800 shadow-inner" dir="rtl">
             <div className="flex flex-wrap gap-3 text-4xl leading-relaxed font-arabic text-slate-100">
               {sentenceTokens.map((token, idx) => {
@@ -569,7 +641,6 @@ export default function App() {
             </div>
           </div>
           
-          {/* Translate Button */}
           <div className="flex justify-center -my-2 z-20">
             <button 
               onClick={handleTranslateSentence}
@@ -581,7 +652,6 @@ export default function App() {
             </button>
           </div>
 
-          {/* Translation Box */}
           <div className="w-full">
             <textarea
               value={translationInput}
@@ -591,7 +661,6 @@ export default function App() {
             />
           </div>
           
-          {/* Footer Actions */}
           <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800/50 mt-2">
              <div className="flex items-center gap-2 text-slate-500 text-xs">
               <CheckCircle2 className="w-3 h-3 text-emerald-500" />
@@ -599,7 +668,10 @@ export default function App() {
             </div>
 
             <div className="flex gap-2">
-              <button className="flex items-center gap-2 bg-slate-800 hover:bg-rose-900/30 hover:text-rose-400 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700">
+              <button 
+                onClick={handleDeleteSentence}
+                className="flex items-center gap-2 bg-slate-800 hover:bg-rose-900/30 hover:text-rose-400 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+              >
                 <Trash2 className="w-4 h-4" />
                 Delete
               </button>
@@ -676,10 +748,16 @@ export default function App() {
                   >
                     <tab.icon className="w-4 h-4" />
                     {tab.label}
-                    {/* Success Animation Badge */}
+                    {/* Success Animation Badge (Green +) */}
                     {tab.id === 'roots' && newRootsCount > 0 && (
                       <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 animate-out fade-out duration-[3000ms]">
                         +{newRootsCount}
+                      </span>
+                    )}
+                    {/* Delete Animation Badge (Red -) */}
+                    {tab.id === 'roots' && deletedRootsCount > 0 && (
+                      <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400 animate-out fade-out duration-[3000ms]">
+                        -{deletedRootsCount}
                       </span>
                     )}
                     {activeTab === tab.id && (
@@ -751,8 +829,9 @@ export default function App() {
                             <tr 
                               key={w.word_id}
                               ref={el => wordRefs.current[w.word_id] = el}
+                              onClick={() => handleTableWordClick(w)}
                               className={`
-                                border-b border-slate-800/50 transition-colors duration-500
+                                border-b border-slate-800/50 transition-colors duration-500 cursor-pointer
                                 ${highlightedWordId === w.word_id ? 'bg-indigo-500/20' : 'hover:bg-slate-800/30'}
                               `}
                             >
