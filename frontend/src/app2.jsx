@@ -124,18 +124,7 @@ export default function App() {
       setRoots(rData);
       
       if (sData.length > 0) {
-          // Note: using function update form or checking ref would be cleaner 
-          // to avoid selectedSentenceId dependency loop, but here we just
-          // want to ensure we don't select an ID that doesn't exist.
-          // Since this runs on mount/refresh, we can rely on current state for now
-          // or just default to first if invalid.
-          // For simplicity in this fix, I'll access the state directly or 
-          // just set it logic. To avoid warning, we won't read selectedSentenceId here
-          // unless we add it to deps, but adding it to deps loops.
-          // BETTER: Just set to first if not set, or check existence in a useEffect
-          // observing sentences.
-          // For this specific 'fetchData', I'll just set the first one if empty.
-          // Logic moved to a separate effect below to break cycle.
+          // Default selection logic handled in separate effect
       } 
 
     } catch (err) {
@@ -144,13 +133,13 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, []); // No dependencies needed for basic fetch
+  }, []); 
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  // Separate effect to handle selection initialization to avoid loop in fetchData
+  // Separate effect to handle selection initialization
   useEffect(() => {
       if (!loading && sentences.length > 0) {
           if (!selectedSentenceId || !sentences.find(s => s.sentence_id === selectedSentenceId)) {
@@ -165,16 +154,20 @@ export default function App() {
   
   const sentenceTokens = selectedSentence 
     ? selectedSentence.plaintext.split(' ').map(token => {
-        const wordMatch = words.find(w => w.plaintext === token);
+        // Simple token cleanup for matching - remove punctuation just for lookup
+        // Note: We display the original token, but match against cleaned word
+        const cleanToken = token.replace(/[؟،!.,;:]/g, ''); 
+        const wordMatch = words.find(w => w.plaintext === cleanToken || w.plaintext === token);
         return {
           text: token,
+          cleanText: cleanToken,
           wordData: wordMatch,
           rootData: wordMatch ? roots.find(r => r.root_id === wordMatch.root_id) : null
         };
       })
     : [];
 
-  const missingWords = sentenceTokens.filter(t => !t.wordData).map(t => t.text);
+  const missingWords = sentenceTokens.filter(t => !t.wordData).map(t => t.cleanText || t.text);
   const hasMissingWords = missingWords.length > 0;
 
   useEffect(() => {
@@ -185,7 +178,7 @@ export default function App() {
         }
         setDeleteConfirmSentence(false); 
     }
-  }, [selectedSentenceId, selectedSentence, isEditingSentence]); // Added isEditingSentence
+  }, [selectedSentenceId, selectedSentence, isEditingSentence]); 
 
   // --- Animation Effects ---
   useEffect(() => {
@@ -217,6 +210,7 @@ export default function App() {
       setEditingWordId(null);
       setDeleteConfirmWord(false); 
       
+      // Initial: Set text (it might have punctuation)
       setEditingWord(tokenText);
       setEditingRoot("");
       setEditingWordTrans("");
@@ -234,13 +228,15 @@ export default function App() {
         if (suggestions && suggestions.length > 0) {
             const suggestion = suggestions[0];
             if (suggestion.plaintext !== "Error") {
+                // Update with CLEAN word from backend
+                setEditingWord(suggestion.plaintext); 
                 setEditingWordTrans(suggestion.translation);
                 setEditingRoot(suggestion.root_plaintext);
                 setEditingRootTrans(suggestion.root_translation);
             }
         }
       } catch (err) {
-        console.error("Error fetching suggestions:", err);
+        console.error("Error fetching ISRI suggestions:", err);
       } finally {
         setIsTranslatingWord(false);
       }
@@ -732,7 +728,6 @@ export default function App() {
   );
 
   const renderSentenceEditor = () => {
-    // If loading AND no data, show loader. If loading but we have data (e.g. background refresh), show data.
     if (loading && sentences.length === 0) {
        return (
         <div className="flex flex-col items-center justify-center h-64 text-indigo-400 border-2 border-dashed border-indigo-900 rounded-xl bg-slate-900/30">
@@ -752,7 +747,6 @@ export default function App() {
     }
 
     if (!selectedSentence && sentences.length > 0) {
-        // Fallback if no sentence selected but data exists
         return (
             <div className="flex flex-col items-center justify-center h-64 text-slate-500 border-2 border-dashed border-slate-800 rounded-xl bg-slate-900/30">
               <p className="text-lg">Select a sentence</p>
@@ -760,7 +754,7 @@ export default function App() {
         )
     }
 
-    if (!selectedSentence) return null; // Should ideally be handled above or by loader
+    if (!selectedSentence) return null;
 
     if (isEditingWord) {
       return renderWordEditor();

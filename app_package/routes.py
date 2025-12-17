@@ -7,6 +7,7 @@ from tashaphyne.stemming import ArabicLightStemmer
 import nltk
 from nltk.stem.isri import ISRIStemmer
 import re
+import string
 
 main = Blueprint('main', __name__)
 BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
@@ -17,6 +18,13 @@ stemmer = ArabicLightStemmer()
 # Initialize NLTK ISRIStemmer
 isri_stemmer = ISRIStemmer()
 nltk.download('punkt_tab')
+
+def clean_punctuation(text):
+    # Arabic and English punctuation to strip
+    # \u060C is comma, \u061B is semicolon, \u061F is question mark
+    punctuation = string.punctuation + '،؛؟”'
+    translator = str.maketrans('', '', punctuation)
+    return text.translate(translator).strip()
 
 @main.route('/', defaults={'path': ''})
 @main.route('/<path:path>')
@@ -111,7 +119,11 @@ def suggest_words():
     suggestions = []
     translator = GoogleTranslator(source='ar', target='en')
 
-    for word_text in words_input:
+    for raw_word_text in words_input:
+        # Clean punctuation
+        word_text = clean_punctuation(raw_word_text)
+        if not word_text: continue
+
         try:
             # 1. Stem to get Root
             # Note: Tashaphyne might return multiple roots or need specific handling
@@ -153,7 +165,12 @@ def suggest_words_isri():
     suggestions = []
     translator = GoogleTranslator(source='ar', target='en')
 
-    for word_text in words_input:
+    for raw_word_text in words_input:
+        
+        # Clean punctuation
+        word_text = clean_punctuation(raw_word_text)
+        if not word_text: continue
+        
         try:
             # 1. Stem using ISRI
             # ISRI usually doesn't need as much normalization, but we can do simple ones
