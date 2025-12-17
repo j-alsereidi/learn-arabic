@@ -39,7 +39,7 @@ const Tooltip = ({ children, content }) => {
     <div className="relative inline-block" onMouseEnter={() => setIsVisible(true)} onMouseLeave={() => setIsVisible(false)}>
       {children}
       {isVisible && (
-        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg shadow-xl border border-slate-700 whitespace-nowrap z-50 animate-in fade-in zoom-in duration-200">
+        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg shadow-xl border border-slate-700 whitespace-nowrap z-50 animate-in fade-in zoom-in duration-200 pointer-events-none">
           {content}
           <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
         </div>
@@ -89,8 +89,8 @@ export default function App() {
   const [isStaging, setIsStaging] = useState(false);
   const [isProcessingWords, setIsProcessingWords] = useState(false);
   const [stagedWords, setStagedWords] = useState([]);
-  const [newRootsCount, setNewRootsCount] = useState(0); // For green add animation
-  const [deletedRootsCount, setDeletedRootsCount] = useState(0); // For red delete animation
+  const [newRootsCount, setNewRootsCount] = useState(0); 
+  const [deletedRootsCount, setDeletedRootsCount] = useState(0); 
 
   // Word Editor State
   const [isEditingWord, setIsEditingWord] = useState(false);
@@ -100,6 +100,10 @@ export default function App() {
   const [editingWordTrans, setEditingWordTrans] = useState("");
   const [editingRootTrans, setEditingRootTrans] = useState("");
   const [isTranslatingWord, setIsTranslatingWord] = useState(false);
+
+  // Delete Confirmation State
+  const [deleteConfirmSentence, setDeleteConfirmSentence] = useState(false);
+  const [deleteConfirmWord, setDeleteConfirmWord] = useState(false);
 
   // Refs
   const wordRefs = useRef({});
@@ -121,10 +125,8 @@ export default function App() {
       setWords(wData);
       setRoots(rData);
       
-      // Keep selected sentence valid or default to first
       if (sData.length > 0) {
           if (selectedSentenceId) {
-             // ensure ID still exists (e.g. after deletion elsewhere)
              if(!sData.find(s => s.sentence_id === selectedSentenceId)) {
                  setSelectedSentenceId(sData[0].sentence_id);
              }
@@ -168,9 +170,10 @@ export default function App() {
     if (selectedSentence) {
         setTranslationInput(selectedSentence.translation);
         if (isEditingSentence) {
-             // If we switch sentences while editing (unlikely but safe), update text
              setEditingSentenceText(selectedSentence.plaintext);
         }
+        // Reset delete confirmation when switching sentences
+        setDeleteConfirmSentence(false); 
     }
   }, [selectedSentenceId, selectedSentence]);
 
@@ -199,30 +202,30 @@ export default function App() {
         wordRefs.current[wordId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 100);
     } else {
-      // Create Mode
       setIsEditingWord(true);
-      setEditingWordId(null); // No ID because it's new
+      setEditingWordId(null);
       setEditingWord(tokenText);
       setEditingRoot("");
       setEditingWordTrans("");
       setEditingRootTrans("");
+      setDeleteConfirmWord(false); // Reset delete state for new word editor
     }
   };
 
   const handleTableWordClick = (word) => {
-    // Edit Mode
     const root = roots.find(r => r.root_id === word.root_id);
     setIsEditingWord(true);
-    setEditingWordId(word.word_id); // Capture ID for deletion
+    setEditingWordId(word.word_id);
     setEditingWord(word.plaintext);
     setEditingRoot(root ? root.plaintext : "");
     setEditingWordTrans(word.translation);
     setEditingRootTrans(root ? root.translation : "");
+    setDeleteConfirmWord(false); // Reset delete state
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSentenceSelect = (s) => {
-    setIsEditingSentence(false); // Exit edit mode when switching
+    setIsEditingSentence(false);
     setSelectedSentenceId(s.sentence_id);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -385,26 +388,45 @@ export default function App() {
 
   // --- DELETE HANDLERS ---
 
+  const handleDeleteSentenceClick = () => {
+    if (deleteConfirmSentence) {
+        // Already confirmed, proceed to delete
+        handleDeleteSentence();
+    } else {
+        // First click, ask for confirmation
+        setDeleteConfirmSentence(true);
+    }
+  };
+
   const handleDeleteSentence = async () => {
     if (!selectedSentenceId) return;
-    if (!window.confirm("Are you sure you want to delete this sentence? The words will remain.")) return;
     
     try {
         const response = await fetch(`/api/delete-sentence/${selectedSentenceId}`, { method: 'DELETE' });
         if (response.ok) {
-            await fetchData(); // Will re-select first sentence automatically
+            await fetchData();
+            setDeleteConfirmSentence(false); // Reset
         } else {
             alert("Failed to delete sentence.");
+            setDeleteConfirmSentence(false);
         }
     } catch (err) {
         console.error(err);
         alert("Error deleting sentence");
+        setDeleteConfirmSentence(false);
+    }
+  };
+
+  const handleDeleteWordClick = () => {
+    if (deleteConfirmWord) {
+        handleDeleteWord();
+    } else {
+        setDeleteConfirmWord(true);
     }
   };
 
   const handleDeleteWord = async () => {
-    if (!editingWordId) return; // Can't delete a new word that isn't saved yet
-    if (!window.confirm("Are you sure you want to delete this word? If it's the last word for its root, the root will also be deleted.")) return;
+    if (!editingWordId) return; 
 
     try {
         const response = await fetch(`/api/delete-word/${editingWordId}`, { method: 'DELETE' });
@@ -416,12 +438,15 @@ export default function App() {
             }
             await fetchData();
             setIsEditingWord(false);
+            setDeleteConfirmWord(false);
         } else {
             alert("Failed to delete word: " + result.error);
+            setDeleteConfirmWord(false);
         }
     } catch (err) {
         console.error(err);
         alert("Error deleting word");
+        setDeleteConfirmWord(false);
     }
   };
 
@@ -468,7 +493,7 @@ export default function App() {
         if (result.success) {
             setIsEditingSentence(false);
             await fetchData();
-            setSelectedSentenceId(result.sentence_id); // Switch to new sentence
+            setSelectedSentenceId(result.sentence_id);
         } else {
             alert("Failed to create sentence.");
         }
@@ -548,15 +573,22 @@ export default function App() {
           </div>
 
           <div className="flex justify-between gap-3 pt-4 border-t border-slate-800/50">
+            {/* Delete Button with Safety Catch */}
             <button 
-                onClick={handleDeleteWord}
+                onClick={handleDeleteWordClick}
+                onMouseLeave={() => setDeleteConfirmWord(false)}
                 disabled={!editingWordId}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700 
-                    ${editingWordId ? 'bg-slate-800 hover:bg-rose-900/30 hover:text-rose-400 text-slate-300' : 'bg-slate-900 text-slate-700 cursor-not-allowed'}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all border
+                    ${!editingWordId 
+                        ? 'bg-slate-900 text-slate-700 border-slate-700 cursor-not-allowed' 
+                        : deleteConfirmWord
+                            ? 'bg-rose-600 border-rose-500 text-white hover:bg-rose-500 shadow-lg shadow-rose-500/20'
+                            : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-rose-900/30 hover:text-rose-400'
+                    }
                 `}
             >
                <Trash2 className="w-4 h-4" />
-               Delete
+               {deleteConfirmWord ? "Are you sure?" : "Delete"}
             </button>
 
             <div className="flex gap-3">
@@ -673,17 +705,6 @@ export default function App() {
              <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">
                {isEditingSentence ? "Editing Sentence Text" : `Editing Sentence #${selectedSentence.sentence_id}`}
              </h2>
-             
-             {/* EDIT MODE TOGGLE BUTTON */}
-             {!isEditingSentence && (
-                 <button 
-                    onClick={handleEditSentenceClick}
-                    className="flex items-center gap-2 text-indigo-400 hover:text-indigo-300 text-xs font-bold uppercase tracking-wide transition-colors"
-                 >
-                    <Edit3 className="w-4 h-4" />
-                    Edit Text
-                 </button>
-             )}
           </div>
 
           <div className="bg-slate-950/50 rounded-lg p-8 min-h-[160px] flex items-center justify-center border border-slate-800 shadow-inner" dir="rtl">
@@ -791,19 +812,22 @@ export default function App() {
             ) : (
                 /* VIEW MODE FOOTER */
                 <>
-                    <div className="flex items-center gap-2 text-slate-500 text-xs">
-                        {/* <span>Tip: Click 'Edit Text' above to modify.</span> */}
-                        <button 
-                            onClick={handleDeleteSentence}
-                            className="flex items-center gap-2 bg-slate-800 hover:bg-rose-900/30 hover:text-rose-400 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
-                        >
-                            <Trash2 className="w-4 h-4" />
-                            Delete
-                        </button>
-                    </div>
+                    {/* Delete Button with Safety Catch */}
+                    <button 
+                        onClick={handleDeleteSentenceClick}
+                        onMouseLeave={() => setDeleteConfirmSentence(false)}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all border
+                            ${deleteConfirmSentence
+                                ? 'bg-rose-600 border-rose-500 text-white hover:bg-rose-500 shadow-lg shadow-rose-500/20'
+                                : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-rose-900/30 hover:text-rose-400'
+                            }
+                        `}
+                    >
+                        <Trash2 className="w-4 h-4" />
+                        {deleteConfirmSentence ? "Are you sure?" : "Delete"}
+                    </button>
 
                     <div className="flex gap-2">
-                        
                         <button 
                             onClick={handleAddWordsClick}
                             disabled={!hasMissingWords || isProcessingWords}
@@ -817,6 +841,14 @@ export default function App() {
                         >
                             {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <Languages className="w-4 h-4" />}
                             Add Words
+                        </button>
+
+                        <button 
+                            onClick={handleEditSentenceClick}
+                            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+                        >
+                            <Edit3 className="w-4 h-4" />
+                            Edit
                         </button>
                         
                         <button className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20 active:scale-95">
