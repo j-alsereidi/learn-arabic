@@ -1,10 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   BookOpen, 
   Type, 
   Database, 
-  Search, 
-  Plus, 
   Trash2,
   Save,
   Languages, 
@@ -110,7 +108,7 @@ export default function App() {
   const rootRefs = useRef({});
   
   // --- Data Fetching ---
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       const [sentencesRes, wordsRes, rootsRes] = await Promise.all([
@@ -126,16 +124,19 @@ export default function App() {
       setRoots(rData);
       
       if (sData.length > 0) {
-          if (selectedSentenceId) {
-             if(!sData.find(s => s.sentence_id === selectedSentenceId)) {
-                 setSelectedSentenceId(sData[0].sentence_id);
-             }
-          } else {
-             setSelectedSentenceId(sData[0].sentence_id);
-          }
-      } else {
-          setSelectedSentenceId(null);
-      }
+          // Note: using function update form or checking ref would be cleaner 
+          // to avoid selectedSentenceId dependency loop, but here we just
+          // want to ensure we don't select an ID that doesn't exist.
+          // Since this runs on mount/refresh, we can rely on current state for now
+          // or just default to first if invalid.
+          // For simplicity in this fix, I'll access the state directly or 
+          // just set it logic. To avoid warning, we won't read selectedSentenceId here
+          // unless we add it to deps, but adding it to deps loops.
+          // BETTER: Just set to first if not set, or check existence in a useEffect
+          // observing sentences.
+          // For this specific 'fetchData', I'll just set the first one if empty.
+          // Logic moved to a separate effect below to break cycle.
+      } 
 
     } catch (err) {
       console.error("Error fetching data:", err);
@@ -143,11 +144,21 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []); // No dependencies needed for basic fetch
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [fetchData]);
+
+  // Separate effect to handle selection initialization to avoid loop in fetchData
+  useEffect(() => {
+      if (!loading && sentences.length > 0) {
+          if (!selectedSentenceId || !sentences.find(s => s.sentence_id === selectedSentenceId)) {
+              setSelectedSentenceId(sentences[0].sentence_id);
+          }
+      }
+  }, [loading, sentences, selectedSentenceId]);
+
 
   // --- Derived State ---
   const selectedSentence = sentences.find(s => s.sentence_id === selectedSentenceId);
@@ -174,7 +185,7 @@ export default function App() {
         }
         setDeleteConfirmSentence(false); 
     }
-  }, [selectedSentenceId, selectedSentence]);
+  }, [selectedSentenceId, selectedSentence, isEditingSentence]); // Added isEditingSentence
 
   // --- Animation Effects ---
   useEffect(() => {
@@ -193,7 +204,7 @@ export default function App() {
 
   // --- Handlers ---
 
-  const handleWordClick = (wordId, tokenText) => {
+  const handleWordClick = async (wordId, tokenText) => {
     if (wordId) {
       setActiveTab('words');
       setHighlightedWordId(wordId);
@@ -201,13 +212,38 @@ export default function App() {
         wordRefs.current[wordId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 100);
     } else {
+      // Create Mode (Not Found Word)
       setIsEditingWord(true);
       setEditingWordId(null);
+      setDeleteConfirmWord(false); 
+      
       setEditingWord(tokenText);
       setEditingRoot("");
       setEditingWordTrans("");
       setEditingRootTrans("");
-      setDeleteConfirmWord(false); 
+
+      setIsTranslatingWord(true);
+      try {
+        const response = await fetch('/suggest-words', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ words: [tokenText] })
+        });
+        const suggestions = await response.json();
+        
+        if (suggestions && suggestions.length > 0) {
+            const suggestion = suggestions[0];
+            if (suggestion.plaintext !== "Error") {
+                setEditingWordTrans(suggestion.translation);
+                setEditingRoot(suggestion.root_plaintext);
+                setEditingRootTrans(suggestion.root_translation);
+            }
+        }
+      } catch (err) {
+        console.error("Error fetching suggestions:", err);
+      } finally {
+        setIsTranslatingWord(false);
+      }
     }
   };
 
@@ -286,7 +322,6 @@ export default function App() {
     try {
       let response;
       
-      // If editing an existing word, use update-word endpoint
       if (editingWordId) {
         response = await fetch(`/api/update-word/${editingWordId}`, {
             method: 'PUT',
@@ -299,7 +334,6 @@ export default function App() {
             })
         });
       } else {
-        // Create new word logic
         const payload = {
             items: [{
             plaintext: editingWord,
@@ -344,7 +378,7 @@ export default function App() {
     if (missingWords.length === 0) return;
     setIsProcessingWords(true);
     try {
-      const response = await fetch('/suggest-words', {
+      const response = await fetch('/suggest-words-isri', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ words: missingWords })
@@ -474,7 +508,6 @@ export default function App() {
   };
 
   const handleUpdateSentence = async () => {
-    // If not editing text, we use existing text, but update translation
     const textToSend = isEditingSentence ? editingSentenceText : selectedSentence.plaintext;
     
     try {
@@ -699,7 +732,8 @@ export default function App() {
   );
 
   const renderSentenceEditor = () => {
-    if (loading && !selectedSentence) {
+    // If loading AND no data, show loader. If loading but we have data (e.g. background refresh), show data.
+    if (loading && sentences.length === 0) {
        return (
         <div className="flex flex-col items-center justify-center h-64 text-indigo-400 border-2 border-dashed border-indigo-900 rounded-xl bg-slate-900/30">
           <Loader className="w-8 h-8 mb-4 animate-spin" />
@@ -708,7 +742,25 @@ export default function App() {
       );
     }
 
-    if (!selectedSentence) return null;
+    if (error) {
+       return (
+        <div className="flex flex-col items-center justify-center h-64 text-rose-400 border-2 border-dashed border-rose-900 rounded-xl bg-slate-900/30">
+          <AlertCircle className="w-8 h-8 mb-4" />
+          <p className="text-lg font-medium">{error}</p>
+        </div>
+      );
+    }
+
+    if (!selectedSentence && sentences.length > 0) {
+        // Fallback if no sentence selected but data exists
+        return (
+            <div className="flex flex-col items-center justify-center h-64 text-slate-500 border-2 border-dashed border-slate-800 rounded-xl bg-slate-900/30">
+              <p className="text-lg">Select a sentence</p>
+            </div>
+        )
+    }
+
+    if (!selectedSentence) return null; // Should ideally be handled above or by loader
 
     if (isEditingWord) {
       return renderWordEditor();
@@ -1062,13 +1114,28 @@ export default function App() {
         </section>
       </div>
 
+      {/* Global Styles for Scrollbar & Arabic Font fallback */}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Arabic:wght@300;400;500;700&display=swap');
-        .font-arabic { font-family: 'Noto Sans Arabic', sans-serif; }
-        .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #0f172a; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #475569; }
+        
+        .font-arabic {
+          font-family: 'Noto Sans Arabic', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 8px;
+          height: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: #0f172a; 
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #334155; 
+          border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #475569; 
+        }
       `}</style>
     </div>
   );

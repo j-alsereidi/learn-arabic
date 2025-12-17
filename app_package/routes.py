@@ -4,12 +4,19 @@ from .models import Sentence, Word, Root, Flashcard, WordInstance
 from .extensions import db
 from deep_translator import GoogleTranslator
 from tashaphyne.stemming import ArabicLightStemmer
+import nltk
+from nltk.stem.isri import ISRIStemmer
 import re
 
 main = Blueprint('main', __name__)
 BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
 
+# Intialize Tashaphyne Stemmer
 stemmer = ArabicLightStemmer()
+
+# Initialize NLTK ISRIStemmer
+isri_stemmer = ISRIStemmer()
+nltk.download('punkt_tab')
 
 @main.route('/', defaults={'path': ''})
 @main.route('/<path:path>')
@@ -96,6 +103,7 @@ def suggest_words():
     """
     Takes a list of Arabic words.
     Returns suggested Root and Translations for each.
+    Tashaphyne-based.
     """
     data = request.get_json()
     words_input = data.get('words', [])
@@ -125,6 +133,47 @@ def suggest_words():
             })
         except Exception as e:
             print(f"Error processing word {word_text}: {e}")
+            suggestions.append({
+                'plaintext': word_text,
+                'translation': "Error",
+                'root_plaintext': "Error",
+                'root_translation': "Error"
+            })
+
+    return jsonify(suggestions)
+
+@main.route('/suggest-words-isri', methods=['POST'])
+def suggest_words_isri():
+    """
+    NLTK ISRIStemmer-based suggestions.
+    """
+    data = request.get_json()
+    words_input = data.get('words', [])
+    
+    suggestions = []
+    translator = GoogleTranslator(source='ar', target='en')
+
+    for word_text in words_input:
+        try:
+            # 1. Stem using ISRI
+            # ISRI usually doesn't need as much normalization, but we can do simple ones
+            root_text = isri_stemmer.stem(word_text)
+            
+            # 2. Translate
+            word_translation = translator.translate(word_text)
+            if root_text:
+                 root_translation = translator.translate(root_text)
+            else:
+                 root_translation = ""
+
+            suggestions.append({
+                'plaintext': word_text,
+                'translation': word_translation,
+                'root_plaintext': root_text,
+                'root_translation': root_translation
+            })
+        except Exception as e:
+            print(f"Error processing word {word_text} with ISRI: {e}")
             suggestions.append({
                 'plaintext': word_text,
                 'translation': "Error",

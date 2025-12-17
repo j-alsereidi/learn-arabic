@@ -3,3 +3,4 @@ flask-sqlalchemy
 react
 deep-translator
 Tashaphyne
+nltk
