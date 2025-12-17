@@ -172,7 +172,6 @@ export default function App() {
         if (isEditingSentence) {
              setEditingSentenceText(selectedSentence.plaintext);
         }
-        // Reset delete confirmation when switching sentences
         setDeleteConfirmSentence(false); 
     }
   }, [selectedSentenceId, selectedSentence]);
@@ -208,7 +207,7 @@ export default function App() {
       setEditingRoot("");
       setEditingWordTrans("");
       setEditingRootTrans("");
-      setDeleteConfirmWord(false); // Reset delete state for new word editor
+      setDeleteConfirmWord(false); 
     }
   };
 
@@ -220,7 +219,7 @@ export default function App() {
     setEditingRoot(root ? root.plaintext : "");
     setEditingWordTrans(word.translation);
     setEditingRootTrans(root ? root.translation : "");
-    setDeleteConfirmWord(false); // Reset delete state
+    setDeleteConfirmWord(false); 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -390,10 +389,8 @@ export default function App() {
 
   const handleDeleteSentenceClick = () => {
     if (deleteConfirmSentence) {
-        // Already confirmed, proceed to delete
         handleDeleteSentence();
     } else {
-        // First click, ask for confirmation
         setDeleteConfirmSentence(true);
     }
   };
@@ -405,7 +402,7 @@ export default function App() {
         const response = await fetch(`/api/delete-sentence/${selectedSentenceId}`, { method: 'DELETE' });
         if (response.ok) {
             await fetchData();
-            setDeleteConfirmSentence(false); // Reset
+            setDeleteConfirmSentence(false); 
         } else {
             alert("Failed to delete sentence.");
             setDeleteConfirmSentence(false);
@@ -458,12 +455,15 @@ export default function App() {
   };
 
   const handleUpdateSentence = async () => {
+    // If not editing text, we use existing text, but update translation
+    const textToSend = isEditingSentence ? editingSentenceText : selectedSentence.plaintext;
+    
     try {
         const response = await fetch(`/api/update-sentence/${selectedSentenceId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
-                plaintext: editingSentenceText,
+                plaintext: textToSend,
                 translation: translationInput
             })
         });
@@ -543,9 +543,9 @@ export default function App() {
               <button 
                 onClick={handleTranslateWordEditor}
                 disabled={isTranslatingWord}
-                className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-6 py-2 rounded-full text-xs font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
+                className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-6 py-2 rounded-full text-sm font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
               >
-                {isTranslatingWord ? <Loader className="w-3 h-3 animate-spin" /> : <ArrowDown className="w-3 h-3 group-hover:translate-y-0.5 transition-transform" />}
+                {isTranslatingWord ? <Loader className="w-4 h-4 animate-spin" /> : <ArrowDown className="w-4 h-4 group-hover:translate-y-0.5 transition-transform" />}
                 {isTranslatingWord ? "Translating..." : "Translate"}
               </button>
             </div>
@@ -573,7 +573,6 @@ export default function App() {
           </div>
 
           <div className="flex justify-between gap-3 pt-4 border-t border-slate-800/50">
-            {/* Delete Button with Safety Catch */}
             <button 
                 onClick={handleDeleteWordClick}
                 onMouseLeave={() => setDeleteConfirmWord(false)}
@@ -766,9 +765,9 @@ export default function App() {
             <button 
               onClick={handleTranslateSentence}
               disabled={isTranslating}
-              className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-4 py-1.5 rounded-full text-xs font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
+              className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-6 py-2 rounded-full text-sm font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
             >
-              {isTranslating ? <Loader className="w-3 h-3 animate-spin" /> : <ArrowDown className="w-3 h-3 group-hover:translate-y-0.5 transition-transform" />}
+              {isTranslating ? <Loader className="w-4 h-4 animate-spin" /> : <ArrowDown className="w-4 h-4 group-hover:translate-y-0.5 transition-transform" />}
               {isTranslating ? "Translating..." : "Translate"}
             </button>
           </div>
@@ -851,7 +850,10 @@ export default function App() {
                             Edit
                         </button>
                         
-                        <button className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20 active:scale-95">
+                        <button 
+                            onClick={handleUpdateSentence} // SAVE NOW OVERWRITES IN VIEW MODE
+                            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
+                        >
                             <Save className="w-4 h-4" />
                             Save
                         </button>
