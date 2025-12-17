@@ -86,9 +86,17 @@ export default function App() {
   const [stagedWords, setStagedWords] = useState([]);
   const [newRootsCount, setNewRootsCount] = useState(0); // For animation
 
+  // Word Editor State
+  const [isEditingWord, setIsEditingWord] = useState(false);
+  const [editingWord, setEditingWord] = useState("");
+  const [editingRoot, setEditingRoot] = useState("");
+  const [editingWordTrans, setEditingWordTrans] = useState("");
+  const [editingRootTrans, setEditingRootTrans] = useState("");
+  const [isTranslatingWord, setIsTranslatingWord] = useState(false);
+
   // Refs
   const wordRefs = useRef({});
-  const rootRefs = useRef({}); // <--- FIXED: Added missing ref definition
+  const rootRefs = useRef({});
   
   // --- Data Fetching ---
   const fetchData = async () => {
@@ -151,13 +159,22 @@ export default function App() {
 
   // --- Handlers ---
 
-  const handleWordClick = (wordId) => {
-    if (!wordId) return;
-    setActiveTab('words');
-    setHighlightedWordId(wordId);
-    setTimeout(() => {
-      wordRefs.current[wordId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, 100);
+  const handleWordClick = (wordId, tokenText) => {
+    // If wordId exists (known word), act as before
+    if (wordId) {
+      setActiveTab('words');
+      setHighlightedWordId(wordId);
+      setTimeout(() => {
+        wordRefs.current[wordId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+    } else {
+      // Not found word clicked - Open Word Editor
+      setIsEditingWord(true);
+      setEditingWord(tokenText);
+      setEditingRoot("");
+      setEditingWordTrans("");
+      setEditingRootTrans("");
+    }
   };
 
   const handleSentenceSelect = (s) => {
@@ -165,7 +182,7 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleTranslate = async () => {
+  const handleTranslateSentence = async () => {
     if (!selectedSentence) return;
     setIsTranslating(true);
     try {
@@ -183,24 +200,93 @@ export default function App() {
     }
   };
 
+  const handleTranslateWordEditor = async () => {
+    setIsTranslatingWord(true);
+    try {
+      // Translate Word
+      const wRes = await fetch('/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q: editingWord }),
+      });
+      const wData = await wRes.json();
+      if (wData.translatedText) setEditingWordTrans(wData.translatedText);
+
+      // Translate Root if provided
+      if (editingRoot) {
+        const rRes = await fetch('/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q: editingRoot }),
+        });
+        const rData = await rRes.json();
+        if (rData.translatedText) setEditingRootTrans(rData.translatedText);
+      }
+    } catch (error) {
+      console.error("Translation error:", error);
+    } finally {
+      setIsTranslatingWord(false);
+    }
+  };
+
+  const handleConfirmWordEditor = async () => {
+    if (!editingWord || !editingRoot) {
+      alert("Please enter both Word and Root.");
+      return;
+    }
+
+    setIsProcessingWords(true);
+    try {
+      const payload = {
+        items: [{
+          plaintext: editingWord,
+          translation: editingWordTrans,
+          root_plaintext: editingRoot,
+          root_translation: editingRootTrans
+        }]
+      };
+
+      const response = await fetch('/add-words', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || "Server error");
+      }
+
+      const result = await response.json();
+
+      if (result.success) {
+        if (result.new_roots_count > 0) {
+          setNewRootsCount(result.new_roots_count);
+        }
+        await fetchData();
+        setIsEditingWord(false);
+      }
+    } catch (err) {
+      console.error("Error confirming single word:", err);
+      alert("Error saving word: " + err.message);
+    } finally {
+      setIsProcessingWords(false);
+    }
+  };
+
   const handleAddWordsClick = async () => {
     if (missingWords.length === 0) return;
     
     setIsProcessingWords(true);
     try {
-      // 1. Get Suggestions
       const response = await fetch('/suggest-words', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ words: missingWords })
       });
       const suggestions = await response.json();
-      
-      // 2. Prepare Staging State
-      // Add a 'checked' property to each suggestion for the UI
       setStagedWords(suggestions.map(s => ({ ...s, checked: true })));
       setIsStaging(true);
-      
     } catch (err) {
       console.error("Error getting suggestions:", err);
       alert("Failed to get word suggestions.");
@@ -238,12 +324,9 @@ export default function App() {
       const result = await response.json();
 
       if (result.success) {
-        // Trigger Success Animation if roots were added
         if (result.new_roots_count > 0) {
           setNewRootsCount(result.new_roots_count);
         }
-        
-        // Refresh Data
         await fetchData();
         setIsStaging(false);
         setStagedWords([]);
@@ -257,6 +340,94 @@ export default function App() {
   };
 
   // --- Render Helpers ---
+
+  const renderWordEditor = () => (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl relative overflow-hidden group">
+       <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
+       <div className="relative z-10 flex flex-col gap-6">
+          <div className="flex justify-between items-center border-b border-slate-800 pb-4">
+             <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">Adding New Word</h2>
+             <button onClick={() => setIsEditingWord(false)} className="text-slate-500 hover:text-white transition-colors">
+               <X className="w-5 h-5" />
+             </button>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            {/* Top Row: Word & Root Inputs */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs text-slate-500 font-bold mb-1 block">WORD (ARABIC)</label>
+                <input 
+                  value={editingWord} 
+                  onChange={(e) => setEditingWord(e.target.value)}
+                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-right font-arabic text-xl text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 font-bold mb-1 block">ROOT (ARABIC)</label>
+                <input 
+                  value={editingRoot} 
+                  onChange={(e) => setEditingRoot(e.target.value)}
+                  placeholder="Enter Root..."
+                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-right font-arabic text-xl text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-700"
+                />
+              </div>
+            </div>
+
+            {/* Translate Button */}
+            <div className="flex justify-center">
+              <button 
+                onClick={handleTranslateWordEditor}
+                disabled={isTranslatingWord}
+                className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-6 py-2 rounded-full text-xs font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
+              >
+                {isTranslatingWord ? <Loader className="w-3 h-3 animate-spin" /> : <ArrowDown className="w-3 h-3 group-hover:translate-y-0.5 transition-transform" />}
+                {isTranslatingWord ? "Translating..." : "Translate"}
+              </button>
+            </div>
+
+            {/* Bottom Row: Translations */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs text-slate-500 font-bold mb-1 block">TRANSLATION</label>
+                <input 
+                  value={editingWordTrans} 
+                  onChange={(e) => setEditingWordTrans(e.target.value)}
+                  placeholder="Word translation..."
+                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-slate-500 font-bold mb-1 block">ROOT TRANSLATION</label>
+                <input 
+                  value={editingRootTrans} 
+                  onChange={(e) => setEditingRootTrans(e.target.value)}
+                  placeholder="Root translation..."
+                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4 border-t border-slate-800/50">
+            <button 
+              onClick={() => setIsEditingWord(false)}
+              className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={handleConfirmWordEditor}
+              disabled={isProcessingWords}
+              className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg text-sm font-medium shadow-lg shadow-emerald-500/20 transition-all active:scale-95 disabled:opacity-50"
+            >
+              {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+              Confirm & Save
+            </button>
+          </div>
+       </div>
+    </div>
+  );
 
   const renderStagingArea = () => (
     <div className="flex flex-col h-full bg-slate-900/50">
@@ -341,6 +512,10 @@ export default function App() {
 
     if (!selectedSentence) return null;
 
+    if (isEditingWord) {
+      return renderWordEditor();
+    }
+
     return (
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl relative overflow-hidden group">
         <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
@@ -375,14 +550,14 @@ export default function App() {
                     }
                   >
                     <span
-                      onClick={() => handleWordClick(token.wordData?.word_id)}
+                      onClick={() => handleWordClick(token.wordData?.word_id, token.text)}
                       onMouseEnter={() => isFound && setHighlightedWordId(token.wordData.word_id)}
                       onMouseLeave={() => setHighlightedWordId(null)}
                       className={`
                         px-2 py-1 rounded-md transition-all duration-200 relative
                         ${isFound 
                           ? `cursor-pointer hover:bg-indigo-500/20 hover:text-indigo-300 hover:scale-105 hover:-translate-y-1 ${highlightedWordId === token.wordData?.word_id ? 'bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/50' : ''}`
-                          : 'cursor-help text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-400 decoration-rose-500/30'
+                          : 'cursor-pointer text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-400 decoration-rose-500/30'
                         }
                       `}
                     >
@@ -397,7 +572,7 @@ export default function App() {
           {/* Translate Button */}
           <div className="flex justify-center -my-2 z-20">
             <button 
-              onClick={handleTranslate}
+              onClick={handleTranslateSentence}
               disabled={isTranslating}
               className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-4 py-1.5 rounded-full text-xs font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
             >
