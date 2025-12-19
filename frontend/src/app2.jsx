@@ -14,8 +14,21 @@ import {
   ArrowDown,
   Check,
   X,
-  CopyPlus
+  CopyPlus,
+  HelpCircle,
+  Link as LinkIcon
 } from 'lucide-react';
+
+// --- Helpers ---
+
+// Removes Arabic diacritics to simulate the backend "prune" logic
+const stripDiacritics = (text) => {
+    if (!text) return "";
+    return text
+        .normalize('NFD')
+        .replace(/[\u064B-\u065F\u0640\u0670]/g, '')
+        .replace(/[؟،!.,;:]/g, ''); 
+};
 
 // --- Components ---
 
@@ -69,6 +82,7 @@ export default function App() {
   const [sentences, setSentences] = useState([]);
   const [words, setWords] = useState([]);
   const [roots, setRoots] = useState([]);
+	const [wordInstances, setWordInstances] = useState([]); // Stores manual links
   
   // UI State
   const [loading, setLoading] = useState(true);
@@ -103,6 +117,9 @@ export default function App() {
   const [deleteConfirmSentence, setDeleteConfirmSentence] = useState(false);
   const [deleteConfirmWord, setDeleteConfirmWord] = useState(false);
 
+  // Ambiguity Resolution State
+  const [ambiguityModal, setAmbiguityModal] = useState(null); // Controls the popup
+
   // Refs
   const wordRefs = useRef({});
   const rootRefs = useRef({});
@@ -111,17 +128,19 @@ export default function App() {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const [sentencesRes, wordsRes, rootsRes] = await Promise.all([
+      const [sentencesRes, wordsRes, rootsRes, instanceRes] = await Promise.all([
         fetch('/api/sentences'),
         fetch('/api/words'),
-        fetch('/api/roots')
+        fetch('/api/roots'),
+        fetch('/api/word-instances')
       ]);
-      const [sData, wData, rData] = await Promise.all([
-        sentencesRes.json(), wordsRes.json(), rootsRes.json()
+      const [sData, wData, rData, iData] = await Promise.all([
+        sentencesRes.json(), wordsRes.json(), rootsRes.json(), instanceRes.json()
       ]);
       setSentences(sData);
       setWords(wData);
       setRoots(rData);
+      setWordInstances(iData);
       
       if (sData.length > 0) {
           // Default selection logic handled in separate effect
@@ -153,17 +172,70 @@ export default function App() {
   const selectedSentence = sentences.find(s => s.sentence_id === selectedSentenceId);
   
   const sentenceTokens = selectedSentence 
-    ? selectedSentence.plaintext.split(' ').map(token => {
-        // Simple token cleanup for matching - remove punctuation just for lookup
-        // Note: We display the original token, but match against cleaned word
+    ? selectedSentence.plaintext.split(' ').map((token, index) => {
+        // Check for explicit link (highest priority)
+        const explicitLink = wordInstances.find(
+        		i => i.sentence_id === selectedSentenceId && i.index === index
+        );
+        if (explicitLink) {
+          	const linkedWord = words.find(w => w.word_id === explicitLink.word_id);
+          	if (linkedWord) {
+            		return {
+									text: token,
+									status: 'linked',
+									wordData: linkedWord,
+									rootData: roots.find(r => r.root_id === linkedWord.root_id),
+									index
+                };
+            }
+        }
+
+        // Check for exact match (medium priority)
         const cleanToken = token.replace(/[؟،!.,;:]/g, ''); 
-        const wordMatch = words.find(w => w.plaintext === cleanToken || w.plaintext === token);
-        return {
-          text: token,
-          cleanText: cleanToken,
-          wordData: wordMatch,
-          rootData: wordMatch ? roots.find(r => r.root_id === wordMatch.root_id) : null
-        };
+        const exactMatch = words.find(w => w.plaintext === cleanToken || w.plaintext === token);
+				if (exactMatch) {
+						return {
+							text: token,
+							status: 'exact',
+							wordData: exactMatch,
+							rootData: roots.find(r => r.root_id === exactMatch.root_id),
+							index
+						};
+				}
+
+				// Check for pruned match (lowest priority + ambiguity check)
+				const prunedToken = stripDiacritics(cleanToken);
+				const fuzzyMatches = words.filter(w => w.prune === prunedToken);
+
+				if (fuzzyMatches.length === 1) {
+						// Only one option? Good enough, assume it's this one
+						const match = fuzzyMatches[0];
+						return {
+								text: token,
+								status: 'inferred',
+								wordData: match,
+								rootData: roots.find(r => r.root_id === match.root_id),
+								index
+						};
+				} else if (fuzzyMatches.length > 1) {
+						// MULTIPLE options? Ambiguous!
+						return {
+								text: token,
+								status: 'ambiguous',
+								candidates: fuzzyMatches, // Pass list to UI
+								index
+						};
+				}
+
+				// Not found
+				return {
+					text: token,
+					cleanText: cleanToken,
+					status: 'missing',
+					wordData: null,
+					rootData: null,
+					index
+				};
       })
     : [];
 
@@ -197,12 +269,19 @@ export default function App() {
 
   // --- Handlers ---
 
-  const handleWordClick = async (wordId, tokenText) => {
-    if (wordId) {
+  const handleWordClick = async (token) => {
+		const {wordData, text, status, candidates, index} = token;
+
+		if (status === 'ambiguous') {
+			setAmbiguityModal({ tokenIndex: index, candidates, tokenText: text });
+			return;
+		}
+
+    if (wordData) {
       setActiveTab('words');
-      setHighlightedWordId(wordId);
+      setHighlightedWordId(wordData.word_id);
       setTimeout(() => {
-        wordRefs.current[wordId]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        wordRefs.current[wordData.word_id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 100);
     } else {
       // Create Mode (Not Found Word)
@@ -211,7 +290,7 @@ export default function App() {
       setDeleteConfirmWord(false); 
       
       // Initial: Set text (it might have punctuation)
-      setEditingWord(tokenText);
+      setEditingWord(stripDiacritics(text));
       setEditingRoot("");
       setEditingWordTrans("");
       setEditingRootTrans("");
@@ -221,7 +300,7 @@ export default function App() {
         const response = await fetch('/suggest-words', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ words: [tokenText] })
+            body: JSON.stringify({ words: [text] })
         });
         const suggestions = await response.json();
         
@@ -434,6 +513,32 @@ export default function App() {
     }
   };
 
+	const handleSelectAmbiguousCandidate = async (word) => {
+			if (!ambiguityModal) return;
+			
+			try {
+					const response = await fetch('/api/link-word', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({
+									sentence_id: selectedSentenceId,
+									index: ambiguityModal.tokenIndex,
+									word_id: word.word_id
+							})
+					});
+					
+					if (response.ok) {
+							setAmbiguityModal(null);
+							await fetchData(); // Refresh to see the new 'linked' status
+					} else {
+							alert("Failed to save selection.");
+					}
+			} catch (err) {
+					console.error(err);
+					alert("Error saving selection.");
+			}
+	};
+
   // --- DELETE HANDLERS ---
 
   const handleDeleteSentenceClick = () => {
@@ -552,6 +657,62 @@ export default function App() {
   };
 
   // --- Render Helpers ---
+
+	const renderAmbiguityModal = () => {
+    if (!ambiguityModal) return null;
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">
+                <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
+                    <div>
+                        <h3 className="text-lg font-medium text-indigo-400">Multiple Matches Found</h3>
+                        <p className="text-slate-400 text-sm mt-1">
+                            The word <span className="text-white font-arabic mx-1">"{ambiguityModal.tokenText}"</span> matches multiple entries.
+                        </p>
+                    </div>
+                    <button onClick={() => setAmbiguityModal(null)} className="text-slate-500 hover:text-white">
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+                <div className="p-4 bg-slate-900 max-h-[60vh] overflow-y-auto">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Select the correct meaning:</p>
+                    <div className="space-y-2">
+                        {ambiguityModal.candidates.map(candidate => (
+                            <button
+                                key={candidate.word_id}
+                                onClick={() => handleSelectAmbiguousCandidate(candidate)}
+                                className="w-full flex items-center justify-between p-4 rounded-lg bg-slate-800 hover:bg-indigo-600/20 border border-slate-700 hover:border-indigo-500 transition-all group text-left"
+                            >
+                                <div>
+                                    <div className="text-xl font-arabic text-white mb-1">{candidate.plaintext}</div>
+                                    <div className="text-sm text-slate-400 group-hover:text-indigo-200">{candidate.translation}</div>
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-xs text-slate-500 mb-1">Root</div>
+                                    <div className="text-sm font-arabic text-indigo-400">R-{candidate.root_id}</div>
+                                </div>
+                            </button>
+                        ))}
+                    </div>
+                    <div className="mt-4 pt-4 border-t border-slate-800">
+                         <button 
+                            onClick={() => {
+                                setAmbiguityModal(null);
+                                setIsEditingWord(true);
+                                setEditingWord(ambiguityModal.tokenText);
+                                setEditingWordId(null);
+                            }}
+                            className="w-full py-3 px-4 rounded-lg border border-dashed border-slate-600 text-slate-400 hover:text-white hover:bg-slate-800 hover:border-slate-500 transition-all text-sm font-medium flex items-center justify-center gap-2"
+                        >
+                            <CopyPlus className="w-4 h-4" />
+                            None of these? Create new word
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+  };
 
   const renderWordEditor = () => (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl relative overflow-hidden group">
@@ -786,13 +947,40 @@ export default function App() {
                 <div className="flex flex-wrap gap-3 text-4xl leading-relaxed font-arabic text-slate-100">
                 {sentenceTokens.map((token, idx) => {
                     const isFound = !!token.wordData;
-                    return (
+										const isAmbiguous = token.status === 'ambiguous';
+										const isLinked = token.status === 'linked';
+
+										// Dynamic styles based on token status (optionally used in className)
+										/*
+										let tokenStyle = "cursor-pointer transition-all duration-200 relative px-2 py-1 rounded-md ";
+                    if (isAmbiguous) {
+                        tokenStyle += "text-amber-200 bg-amber-500/10 border-b-2 border-dotted border-amber-500 hover:bg-amber-500/20";
+                    } else if (isLinked) {
+                        tokenStyle += `text-indigo-300 bg-indigo-500/20 ring-1 ring-indigo-500/50 hover:scale-105 hover:-translate-y-1 ${highlightedWordId === token.wordData?.word_id ? 'ring-2 ring-indigo-400' : ''}`;
+                    } else if (token.status === 'exact' || token.status === 'inferred') {
+                        tokenStyle += `text-indigo-200/80 hover:bg-indigo-500/20 hover:text-indigo-300 hover:scale-105 ${highlightedWordId === token.wordData?.word_id ? 'bg-indigo-500/20 ring-1 ring-indigo-500/50' : ''}`;
+                    } else {
+                        tokenStyle += "text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-400 decoration-rose-500/30";
+                    }
+										*/
+										
+										return (
                     <Tooltip 
                         key={idx} 
                         content={
                         <div className="text-center min-w-[80px]">
-                            {isFound ? (
+														{isAmbiguous ? (
+														<div className="text-amber-400 font-medium flex items-center justify-center gap-1">
+																<HelpCircle className="w-3 h-3" />
+																Ambiguous
+														</div>
+                            ) : isFound ? (
                             <>
+																<div className="flex items-center justify-center gap-1 text-slate-400 text-[10px] uppercase tracking-wider mb-1">
+                                    {isLinked && <LinkIcon className="w-3 h-3 text-indigo-400" />}
+                                    {token.status === 'inferred' && "Inferred"}
+                                    {token.status === 'exact' && ""} 
+                                </div> {/*Div added for inferred/exact label*/}
                                 <div className="font-bold text-indigo-300 mb-1">{token.rootData?.plaintext || "No Root"}</div>
                                 <div className="text-slate-300">{token.rootData?.translation}</div>
                             </>
@@ -806,16 +994,20 @@ export default function App() {
                         }
                     >
                         <span
-                        onClick={() => handleWordClick(token.wordData?.word_id, token.text)}
-                        onMouseEnter={() => isFound && setHighlightedWordId(token.wordData.word_id)}
+                        onClick={() => handleWordClick(token)}
+                        onMouseEnter={() => isFound && token.wordData && setHighlightedWordId(token.wordData.word_id)}
                         onMouseLeave={() => setHighlightedWordId(null)}
-                        className={`
+                        className={
+													// Use {tokenStyle} here for dynamic styles
+													`
                             px-2 py-1 rounded-md transition-all duration-200 relative
                             ${isFound 
                             ? `cursor-pointer hover:bg-indigo-500/20 hover:text-indigo-300 hover:scale-105 hover:-translate-y-1 ${highlightedWordId === token.wordData?.word_id ? 'bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/50' : ''}`
                             : 'cursor-pointer text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-400 decoration-rose-500/30'
                             }
-                        `}
+                        	`
+													
+												}
                         >
                         {token.text}
                         </span>
@@ -950,6 +1142,9 @@ export default function App() {
         <section>
           {renderSentenceEditor()}
         </section>
+
+				{/* Modal for Ambiguity Resolution */}
+        {renderAmbiguityModal()}
 
         {/* Bottom Section: Tables or Staging Area */}
         <section className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl overflow-hidden flex flex-col h-[600px] relative transition-all">

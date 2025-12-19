@@ -13,7 +13,7 @@ main = Blueprint('main', __name__)
 BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
 
 # Intialize Tashaphyne Stemmer
-stemmer = ArabicLightStemmer()
+tashaphyne_stemmer = ArabicLightStemmer()
 
 # Initialize NLTK ISRIStemmer
 isri_stemmer = ISRIStemmer()
@@ -21,7 +21,6 @@ nltk.download('punkt_tab')
 
 def clean_punctuation(text):
     # Arabic and English punctuation to strip
-    # \u060C is comma, \u061B is semicolon, \u061F is question mark
     punctuation = string.punctuation + '،؛؟”'
     translator = str.maketrans('', '', punctuation)
     return text.translate(translator).strip()
@@ -33,12 +32,8 @@ def serve(path):
         return send_from_directory(BUILD_DIR, path)
     return send_from_directory(BUILD_DIR, 'index.html')
 
-@main.route('/get-data')
-def get_data():
-    row = Sentence.query.first()
-    return jsonify({'message': row.plaintext if row else "No data found"})
-
 # API endpoints for app.jsx
+
 @main.route('/api/sentences')
 def api_sentences():
     sentences = Sentence.query.all()
@@ -59,7 +54,8 @@ def api_words():
         'translation': w.translation,
         'frequency': w.frequency,
         'known': w.known,
-        'root_id': w.root_id
+        'root_id': w.root_id,
+        'prune': w.prune
     } for w in words])
 
 @main.route('/api/roots')
@@ -71,19 +67,59 @@ def api_roots():
         'translation': r.translation
     } for r in roots])
 
-@main.route('/api/tables')
-def api_tables():
-    """Return metadata about available tables"""
-    return jsonify({
-        'tables': ['sentences', 'words', 'roots', 'flashcards']
-    })
+@main.route('/api/word-instances')
+def api_word_instances():
+    """Returns all explicit links between sentences and words."""
+    instances = WordInstance.query.all()
+    return jsonify([{
+        'sentence_id': i.sentence_id,
+        'word_id': i.word_id,
+        'index': i.index
+    } for i in instances])
 
-@main.route('/api/languages')
-def api_languages():
-    """Return supported languages"""
-    return jsonify({
-        'languages': ['ar', 'en']
-    })
+@main.route('/api/link-word', methods=['POST'])
+def link_word_instance():
+    """Creates or updates a link between a specific word in a sentence and a Word definition."""
+    data = request.get_json()
+    sentence_id = data.get('sentence_id')
+    word_id = data.get('word_id')
+    index = data.get('index')
+
+    if sentence_id is None or word_id is None or index is None:
+        return jsonify({'error': 'Missing data'}), 400
+
+    try:
+        # Check if link exists
+        instance = WordInstance.query.filter_by(sentence_id=sentence_id, index=index).first()
+        
+        if instance:
+            instance.word_id = word_id
+        else:
+            instance = WordInstance(sentence_id=sentence_id, word_id=word_id, index=index)
+            db.session.add(instance)
+        
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@main.route('/api/unlink-word', methods=['POST'])
+def unlink_word_instance():
+    """Removes a link."""
+    data = request.get_json()
+    sentence_id = data.get('sentence_id')
+    index = data.get('index')
+
+    try:
+        instance = WordInstance.query.filter_by(sentence_id=sentence_id, index=index).first()
+        if instance:
+            db.session.delete(instance)
+            db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 @main.route('/translate', methods=['POST'])
 def translate_text():
@@ -128,8 +164,8 @@ def suggest_words():
             # 1. Stem to get Root
             # Note: Tashaphyne might return multiple roots or need specific handling
             # simplistic approach:
-            stemmer.light_stem(word_text)
-            root_text = stemmer.get_root()
+            tashaphyne_stemmer.light_stem(word_text)
+            root_text = tashaphyne_stemmer.get_root()
             
             # 2. Translate Word
             word_translation = translator.translate(word_text)
@@ -166,7 +202,7 @@ def suggest_words_isri():
     translator = GoogleTranslator(source='ar', target='en')
 
     for raw_word_text in words_input:
-        
+
         # Clean punctuation
         word_text = clean_punctuation(raw_word_text)
         if not word_text: continue
@@ -215,7 +251,8 @@ def add_words():
 
     try:
         for item in confirmed_items:
-            word_text = item.get('plaintext')
+            # Clean incoming plaintext just in case, though suggestions usually handle it
+            word_text = clean_punctuation(item.get('plaintext', ''))
             word_trans = item.get('translation')
             root_text = item.get('root_plaintext')
             root_trans = item.get('root_translation')
@@ -238,8 +275,8 @@ def add_words():
 
             # 2. Create Word
             # previously: prune_text = re.sub(r'[\u064B-\u065F\u0640]', '', word_text)
-            stemmer.light_stem(word_text)
-            prune_text = stemmer.get_unvocalized()
+            tashaphyne_stemmer.light_stem(word_text)
+            prune_text = tashaphyne_stemmer.get_unvocalized()
 
             new_word = Word(
                 root_id=root_id,
@@ -276,7 +313,7 @@ def update_word(word_id):
         old_root_id = word.root_id
         
         # New data
-        new_plaintext = data.get('plaintext')
+        new_plaintext = clean_punctuation(data.get('plaintext', ''))
         new_translation = data.get('translation')
         new_root_text = data.get('root_plaintext')
         new_root_trans = data.get('root_translation')
@@ -286,8 +323,8 @@ def update_word(word_id):
         word.translation = new_translation
         
         # Update prune
-        stemmer.light_stem(new_plaintext)
-        word.prune = stemmer.get_unvocalized()
+        tashaphyne_stemmer.light_stem(new_plaintext)
+        word.prune = tashaphyne_stemmer.get_unvocalized()
 
         # Handle Root logic
         # Check if the new root exists
@@ -297,9 +334,13 @@ def update_word(word_id):
         new_root_created = False
 
         if existing_root:
-            # Use existing root
-            if word.root_id != existing_root.root_id:
-                word.root_id = existing_root.root_id
+            # Root exists. 
+            # 1. Always update the translation of the existing root if provided
+            if new_root_trans:
+                existing_root.translation = new_root_trans
+            
+            # 2. Link word to this root
+            word.root_id = existing_root.root_id
         else:
             # Create new root
             new_root = Root(plaintext=new_root_text, translation=new_root_trans)
@@ -343,7 +384,8 @@ def delete_sentence(sentence_id):
         if not sentence:
             return jsonify({'error': 'Sentence not found'}), 404
         
-        # Deleting sentence does NOT delete words (as requested)
+        WordInstance.query.filter_by(sentence_id=sentence_id).delete()
+
         db.session.delete(sentence)
         db.session.commit()
         
@@ -401,9 +443,14 @@ def update_sentence(sentence_id):
         if not sentence:
             return jsonify({'error': 'Sentence not found'}), 404
         
+        old_length = sentence.length
         sentence.plaintext = data.get('plaintext', sentence.plaintext)
         sentence.translation = data.get('translation', sentence.translation)
         sentence.length = len(sentence.plaintext.split())
+
+        # If length changed, handle WordInstances accordingly.
+        if old_length != sentence.length:
+            WordInstance.query.filter_by(sentence_id=sentence_id).delete() 
         
         db.session.commit()
         return jsonify({'success': True})
@@ -459,7 +506,7 @@ def twilio_webhook():
         db.session.commit()
 
         # Respond to Twilio with TwiML
-        response_message = f"Saved sentence: {message_body}"
+        response_message = f"Saved sentence ✅ \"{message_body}\""
         xml_response = f"""
         <Response>
             <Message>{response_message}</Message>
