@@ -1,6 +1,5 @@
-from flask import Blueprint, render_template, jsonify, send_from_directory, request, Response
-import os
-from .models import Sentence, Word, Root, Flashcard, WordInstance
+from flask import Blueprint, jsonify, request, Response
+from .models import Sentence, Word, Root, WordInstance
 from .extensions import db
 from deep_translator import GoogleTranslator
 from tashaphyne.stemming import ArabicLightStemmer
@@ -10,19 +9,6 @@ import re
 import string
 
 main = Blueprint('main', __name__)
-
-# --- CONFIGURATION: Frontend Build Directory ---
-# Check if we are running on Render (or any environment where CWD is root)
-# os.getcwd() on Render usually returns /opt/render/project/src
-cwd_build = os.path.join(os.getcwd(), 'frontend', 'build')
-
-if os.path.exists(cwd_build):
-    BUILD_DIR = cwd_build
-else:
-    # Fallback: relative to this file (app_package/routes.py -> ../frontend/build)
-    BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build'))
-
-print(f"SERVING FRONTEND FROM: {BUILD_DIR}")
 
 # --- INITIALIZATION ---
 tashaphyne_stemmer = ArabicLightStemmer()
@@ -96,39 +82,11 @@ def update_sentence_completeness(sentence):
         return True 
     return False
 
-# --- FRONTEND SERVING ROUTES ---
-
-@main.route('/debug/build-dir')
-def debug_build_dir():
-    """Debug endpoint to list files in the build directory."""
-    try:
-        files = []
-        for root, dirs, filenames in os.walk(BUILD_DIR):
-            for filename in filenames:
-                files.append(os.path.relpath(os.path.join(root, filename), BUILD_DIR))
-        return jsonify({
-            'build_dir': BUILD_DIR,
-            'exists': os.path.exists(BUILD_DIR),
-            'cwd': os.getcwd(),
-            'files': files
-        })
-    except Exception as e:
-        return jsonify({'error': str(e), 'build_dir': BUILD_DIR})
-
-# 2. Catch-all for other files (manifest.json, favicon, etc) inside build root
-@main.route('/<path:path>')
-def serve_file(path):
-    if path != "" and os.path.exists(os.path.join(BUILD_DIR, path)):
-        return send_from_directory(BUILD_DIR, path)
-    # If file not found, fallback to index.html (SPA routing)
-    return send_from_directory(BUILD_DIR, 'index.html')
-
-# 3. Root URL
-@main.route('/')
-def serve_index():
-    return send_from_directory(BUILD_DIR, 'index.html')
-
 # --- API ENDPOINTS ---
+
+@main.route('/')
+def home():
+    return jsonify({"status": "API is running. Frontend is hosted separately."})
 
 @main.route('/get-data')
 def get_data():
