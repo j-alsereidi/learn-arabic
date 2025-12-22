@@ -10,12 +10,7 @@ import re
 import string
 
 main = Blueprint('main', __name__)
-# BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
-if os.path.exists(os.path.join(os.getcwd(), 'frontend', 'build')):
-    BUILD_DIR = os.path.join(os.getcwd(), 'frontend', 'build')
-else:
-    # Fallback: relative to this file (app_package/routes.py -> ../frontend/build)
-    BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build'))
+BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
 
 print(f"Serving frontend from: {BUILD_DIR}")
 
@@ -101,6 +96,22 @@ def serve(path):
     return send_from_directory(BUILD_DIR, 'index.html')
 
 # Explicitly handle frontend static files
+
+@main.route('/debug/build-dir')
+def debug_build_dir():
+    """Debug endpoint to list files in the build directory."""
+    try:
+        files = []
+        for root, dirs, filenames in os.walk(BUILD_DIR):
+            for filename in filenames:
+                files.append(os.path.relpath(os.path.join(root, filename), BUILD_DIR))
+        return jsonify({
+            'build_dir': BUILD_DIR,
+            'exists': os.path.exists(BUILD_DIR),
+            'files': files
+        })
+    except Exception as e:
+        return jsonify({'error': str(e), 'build_dir': BUILD_DIR})
 
 # override Flask's default /static behavior
 @main.route('/static/<path:filename>')
