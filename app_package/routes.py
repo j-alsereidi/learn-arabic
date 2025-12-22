@@ -115,12 +115,6 @@ def debug_build_dir():
     except Exception as e:
         return jsonify({'error': str(e), 'build_dir': BUILD_DIR})
 
-# 1. Explicitly handle static files to override Flask's default /static behavior
-@main.route('/static/<path:filename>')
-def serve_static(filename):
-    root_dir = os.path.join(BUILD_DIR, 'static')
-    return send_from_directory(root_dir, filename)
-
 # 2. Catch-all for other files (manifest.json, favicon, etc) inside build root
 @main.route('/<path:path>')
 def serve_file(path):
