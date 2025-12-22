@@ -131,10 +131,10 @@ export default function App() {
     try {
       setLoading(true);
       const [sentencesRes, wordsRes, rootsRes, instanceRes] = await Promise.all([
-        fetch('${API_BASE}/api/sentences'),
-        fetch('${API_BASE}/api/words'),
-        fetch('${API_BASE}/api/roots'),
-        fetch('${API_BASE}/api/word-instances')
+        fetch(`${API_BASE}/api/sentences`),
+        fetch(`${API_BASE}/api/words`),
+        fetch(`${API_BASE}/api/roots`),
+        fetch(`${API_BASE}/api/word-instances`)
       ]);
       const [sData, wData, rData, iData] = await Promise.all([
         sentencesRes.json(), wordsRes.json(), rootsRes.json(), instanceRes.json()
