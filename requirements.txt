@@ -4,3 +4,5 @@ react
 deep-translator
 Tashaphyne
 nltk
+gunicorn
+psycopg2-binary

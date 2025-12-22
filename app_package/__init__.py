@@ -1,27 +1,41 @@
 from flask import Flask
+from flask_cors import CORS # You will likely need CORS if frontend/backend are on different domains
 import os
 
 # Import db from extensions (not defined here)
 from .extensions import db
 
 def create_app():
-    # Configure build folders so Flask serves the React build correctly
-    BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build'))
-    STATIC_DIR = os.path.join(BUILD_DIR, 'static')
-    app = Flask(__name__, static_folder=STATIC_DIR, static_url_path='/static', template_folder=BUILD_DIR)
+    app = Flask(__name__)
 
-    # Ensure the instance folder exists
-    try:
-        os.makedirs(app.instance_path)
-    except OSError:
-        pass # The folder already exists
-    db_path = os.path.join(app.instance_path, 'demo.db')
-    print(f"Database path: {db_path}")
+    # Enable CORS for development and production
+    CORS(app) 
 
-    # Configuration
-    app.config['SECRET_KEY'] = 'dev_key_for_now'
-    app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+    # Database Configuration
+    # 1. Check for DATABASE_URL environment variable (Production - Supabase/Render)
+    # 2. Fallback to local SQLite (Development)
+    database_url = os.environ.get('DATABASE_URL')
+    
+    if database_url:
+        # Fix for some PaaS that use postgres:// instead of postgresql://
+        if database_url.startswith("postgres://"):
+            database_url = database_url.replace("postgres://", "postgresql://", 1)
+        app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+        # Print masked URL for debugging connection issues without leaking password
+        masked_url = database_url.split('@')[-1] if '@' in database_url else 'PRODUCTION_DB'
+        print(f"Using Production Database: ...@{masked_url}") 
+    else:
+        # Local SQLite
+        try:
+            os.makedirs(app.instance_path)
+        except OSError:
+            pass 
+        db_path = os.path.join(app.instance_path, 'demo.db')
+        app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+        print(f"Using Local Database: {db_path}")
+
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev_key_for_now')
 
     # Initialize extensions
     db.init_app(app)
@@ -33,12 +47,23 @@ def create_app():
     from .routes import main
     app.register_blueprint(main)
 
-    # Initialize Database
+    # Initialize Database logic
+    # In production, we usually use Flask-Migrate, but for now we'll stick to create_all
+    # We wrap it in a try-except to avoid issues if DB isn't ready or during build steps
     with app.app_context():
-        db.create_all()
-        
-        from .database import seed_database
-        from . import sets
-        seed_database([sets.demo])
+        try:
+            db.create_all()
+            
+            # Optional: Seed data if empty (and if we are local or explicitly told to)
+            # You might not want to auto-seed production every time automatically, 
+            # unless SEED_DB env var is set or we are in dev (no database_url).
+            should_seed = (not database_url) or (os.environ.get('SEED_DB') == 'true')
+            
+            if should_seed:
+                from .database import seed_database
+                from . import sets
+                seed_database([sets.demo])
+        except Exception as e:
+            print(f"Database initialization skipped or failed: {e}")
 
     return app
