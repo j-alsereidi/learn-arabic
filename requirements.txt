@@ -6,3 +6,4 @@ Tashaphyne
 nltk
 gunicorn
 psycopg2-binary
+flask-cors
