@@ -239,7 +239,7 @@ export default function App() {
       })
     : [];
 
-  const missingWords = sentenceTokens.filter(t => !t.wordData).map(t => t.cleanText || t.text);
+  const missingWords = sentenceTokens.filter(t => t.status === 'missing').map(t => t.cleanText || t.text);
   const hasMissingWords = missingWords.length > 0;
 
   useEffect(() => {

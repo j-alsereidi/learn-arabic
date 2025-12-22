@@ -25,6 +25,67 @@ def clean_punctuation(text):
     translator = str.maketrans('', '', punctuation)
     return text.translate(translator).strip()
 
+def calculate_completeness(sentence):
+    """
+    Determines if a sentence is complete based on database state.
+    Complete = 
+    1. Sentence has a translation.
+    2. All words are resolved (linked via WordInstance OR exact match OR unique fuzzy match).
+    (Note: Whether the *words themselves* have translations is irrelevant).
+    """
+    # 1. Check if Sentence has translation
+    if not sentence.translation or not sentence.translation.strip():
+        return False
+
+    if not sentence.plaintext:
+        return False
+
+    tokens = sentence.plaintext.split()
+    
+    # Get explicit instances for this sentence
+    instances = {i.index: i.word_id for i in WordInstance.query.filter_by(sentence_id=sentence.sentence_id).all()}
+    
+    for idx, raw_token in enumerate(tokens):
+        # 2. Check Explicit Link (WordInstance)
+        if idx in instances:
+            # Word is resolved explicitly -> Valid
+            continue
+
+        # 3. Clean punctuation
+        token = clean_punctuation(raw_token)
+        if not token:
+            continue # Ignore pure punctuation
+
+        # 4. Check Exact Match
+        exact_matches = Word.query.filter_by(plaintext=token).first()
+        if exact_matches:
+            # Word is resolved via exact match -> Valid
+            continue
+
+        # 5. Check Pruned/Fuzzy Match (for Ambiguity)
+        tashaphyne_stemmer.light_stem(token)
+        pruned_token = tashaphyne_stemmer.get_unvocalized()
+        
+        fuzzy_matches = Word.query.filter_by(prune=pruned_token).all()
+        
+        if len(fuzzy_matches) == 0:
+            return False # Not Found -> Incomplete
+        elif len(fuzzy_matches) > 1:
+            return False # Ambiguous (needs WordInstance) -> Incomplete
+        else:
+            # Single fuzzy match -> Valid
+            continue
+                
+    return True
+
+def update_sentence_completeness(sentence):
+    """Helper to calculate and save completeness."""
+    is_complete = calculate_completeness(sentence)
+    if sentence.complete != is_complete:
+        sentence.complete = is_complete
+        return True # Changed
+    return False
+
 @main.route('/', defaults={'path': ''})
 @main.route('/<path:path>')
 def serve(path):
@@ -98,6 +159,11 @@ def link_word_instance():
             instance = WordInstance(sentence_id=sentence_id, word_id=word_id, index=index)
             db.session.add(instance)
         
+        # Recalculate completeness for this sentence
+        sentence = Sentence.query.get(sentence_id)
+        if sentence:
+            update_sentence_completeness(sentence)
+        
         db.session.commit()
         return jsonify({'success': True})
     except Exception as e:
@@ -115,6 +181,12 @@ def unlink_word_instance():
         instance = WordInstance.query.filter_by(sentence_id=sentence_id, index=index).first()
         if instance:
             db.session.delete(instance)
+
+            # Recalculate completeness for this sentence
+            sentence = Sentence.query.get(sentence_id)
+            if sentence:
+                update_sentence_completeness(sentence)
+            
             db.session.commit()
         return jsonify({'success': True})
     except Exception as e:
@@ -249,6 +321,10 @@ def add_words():
     new_roots_count = 0
     new_words_count = 0
 
+    # Track words to check for sentence updates
+    added_words_plain = []
+    added_words_prune = []
+
     try:
         for item in confirmed_items:
             # Clean incoming plaintext just in case, though suggestions usually handle it
@@ -289,7 +365,35 @@ def add_words():
             db.session.add(new_word)
             new_words_count += 1
 
+            added_words_plain.append(word_text)
+            added_words_prune.append(prune_text)
+
+        db.session.commit() # Commit words then proceed to update sentences
+
+        # 3. Hybrid Optimization: Update affected sentences
+        # Find sentences that contain the new words and are not yet complete
+        # We check both exact text match and fuzzy prune match logic
+        affected_sentences = set()
+        
+        # Simple scan strategy: get all incomplete sentences
+        # and re-check them if they match.
+        # To be more efficient with SQL:
+        potential_sentences = Sentence.query.filter_by(complete=False).all()
+        
+        for sent in potential_sentences:
+            # Check if this sentence contains any of the added words
+            # This is a broad check, but saves running the full completeness check on irrelevant sentences
+            should_check = False
+            for w in added_words_plain:
+                if w in sent.plaintext: 
+                    should_check = True
+                    break
+            
+            if should_check:
+                update_sentence_completeness(sent)
+                
         db.session.commit()
+
         return jsonify({
             'success': True, 
             'new_roots_count': new_roots_count,
@@ -311,6 +415,7 @@ def update_word(word_id):
             return jsonify({'error': 'Word not found'}), 404
 
         old_root_id = word.root_id
+        old_plaintext = word.plaintext # for sentence update checks
         
         # New data
         new_plaintext = clean_punctuation(data.get('plaintext', ''))
@@ -361,6 +466,27 @@ def update_word(word_id):
                     db.session.delete(old_root)
                     deleted_root = True
 
+        # Hybrid Optimization: Update affected sentences
+        # Sentences containing the OLD word might become incomplete
+        # Sentences containing the NEW word might become complete
+        
+        # 1. Find sentences with old text
+        sents_with_old = Sentence.query.filter(Sentence.plaintext.like(f'%{old_plaintext}%')).all()
+        for s in sents_with_old:
+            update_sentence_completeness(s)
+            
+        # 2. Find sentences with new text
+        if new_plaintext != old_plaintext:
+            sents_with_new = Sentence.query.filter(Sentence.plaintext.like(f'%{new_plaintext}%')).all()
+            for s in sents_with_new:
+                update_sentence_completeness(s)
+        
+        # 3. Find sentences explicitly linked to this word ID
+        linked_instances = WordInstance.query.filter_by(word_id=word_id).all()
+        for inst in linked_instances:
+            s = Sentence.query.get(inst.sentence_id)
+            if s: update_sentence_completeness(s)
+
         db.session.commit()
         
         return jsonify({
@@ -406,6 +532,10 @@ def delete_word(word_id):
             return jsonify({'error': 'Word not found'}), 404
         
         root_id = word.root_id
+        word_plain = word.plaintext
+
+        # Hybrid Optimization Pre-fetch: Get linked sentences before deletion
+        linked_sentences = [inst.sentence_id for inst in WordInstance.query.filter_by(word_id=word_id).all()]
         
         # Delete the word
         db.session.delete(word)
@@ -421,6 +551,17 @@ def delete_word(word_id):
                 db.session.delete(root)
                 deleted_root = True
         
+        # Hybrid Optimization: Recalculate affected sentences
+        # 1. Explicitly linked sentences
+        for sid in linked_sentences:
+            s = Sentence.query.get(sid)
+            if s: update_sentence_completeness(s)
+            
+        # 2. Sentences containing the text (might rely on this word)
+        text_matches = Sentence.query.filter(Sentence.plaintext.like(f'%{word_plain}%')).all()
+        for s in text_matches:
+            update_sentence_completeness(s)
+
         db.session.commit()
         
         return jsonify({
@@ -450,7 +591,9 @@ def update_sentence(sentence_id):
 
         # If length changed, handle WordInstances accordingly.
         if old_length != sentence.length:
-            WordInstance.query.filter_by(sentence_id=sentence_id).delete() 
+            WordInstance.query.filter_by(sentence_id=sentence_id).delete()
+        
+        update_sentence_completeness(sentence)
         
         db.session.commit()
         return jsonify({'success': True})
@@ -470,6 +613,8 @@ def create_sentence():
             length=len(data.get('plaintext', '').split())
         )
         db.session.add(new_sentence)
+        db.session.flush()
+        update_sentence_completeness(new_sentence) # Initial completeness calculation
         db.session.commit()
         
         return jsonify({
@@ -503,6 +648,7 @@ def twilio_webhook():
             length=len(message_body.split())
         )
         db.session.add(new_sentence)
+        # No need to calculate completeness because no translations
         db.session.commit()
 
         # Respond to Twilio with TwiML
