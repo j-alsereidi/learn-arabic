@@ -10,7 +10,8 @@ import re
 import string
 
 main = Blueprint('main', __name__)
-BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
+# BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
+BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'build')
 
 # Intialize Tashaphyne Stemmer
 tashaphyne_stemmer = ArabicLightStemmer()
