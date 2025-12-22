@@ -11,7 +11,13 @@ import string
 
 main = Blueprint('main', __name__)
 # BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build')
-BUILD_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'build')
+if os.path.exists(os.path.join(os.getcwd(), 'frontend', 'build')):
+    BUILD_DIR = os.path.join(os.getcwd(), 'frontend', 'build')
+else:
+    # Fallback: relative to this file (app_package/routes.py -> ../frontend/build)
+    BUILD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'frontend', 'build'))
+
+print(f"Serving frontend from: {BUILD_DIR}")
 
 # Intialize Tashaphyne Stemmer
 tashaphyne_stemmer = ArabicLightStemmer()
