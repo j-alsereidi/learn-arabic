@@ -100,6 +100,28 @@ def serve(path):
         return send_from_directory(BUILD_DIR, path)
     return send_from_directory(BUILD_DIR, 'index.html')
 
+# Explicitly handle frontend static files
+
+# override Flask's default /static behavior
+@main.route('/static/<path:filename>')
+def serve_static(filename):
+    root_dir = os.path.join(BUILD_DIR, 'static')
+    return send_from_directory(root_dir, filename)
+
+# 2. Catch-all for other files (manifest.json, favicon, etc) inside build root
+@main.route('/<path:path>')
+def serve_file(path):
+    if path != "" and os.path.exists(os.path.join(BUILD_DIR, path)):
+        return send_from_directory(BUILD_DIR, path)
+    # If file not found, fallback to index.html (SPA routing)
+    return send_from_directory(BUILD_DIR, 'index.html')
+
+# 3. Root URL
+@main.route('/')
+def serve_index():
+    return send_from_directory(BUILD_DIR, 'index.html')
+
+
 # API endpoints for app.jsx
 
 @main.route('/api/sentences')
