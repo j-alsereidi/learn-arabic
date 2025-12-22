@@ -19,6 +19,8 @@ import {
   Link as LinkIcon
 } from 'lucide-react';
 
+const API_BASE = process.env.REACT_APP_API_URL || '';
+
 // --- Helpers ---
 
 // Removes Arabic diacritics to simulate the backend "prune" logic
@@ -129,10 +131,10 @@ export default function App() {
     try {
       setLoading(true);
       const [sentencesRes, wordsRes, rootsRes, instanceRes] = await Promise.all([
-        fetch('/api/sentences'),
-        fetch('/api/words'),
-        fetch('/api/roots'),
-        fetch('/api/word-instances')
+        fetch('${API_BASE}/api/sentences'),
+        fetch('${API_BASE}/api/words'),
+        fetch('${API_BASE}/api/roots'),
+        fetch('${API_BASE}/api/word-instances')
       ]);
       const [sData, wData, rData, iData] = await Promise.all([
         sentencesRes.json(), wordsRes.json(), rootsRes.json(), instanceRes.json()
@@ -297,7 +299,7 @@ export default function App() {
 
       setIsTranslatingWord(true);
       try {
-        const response = await fetch('/suggest-words', {
+        const response = await fetch(`${API_BASE}/suggest-words`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ words: [text] })
@@ -346,7 +348,7 @@ export default function App() {
 
     setIsTranslating(true);
     try {
-      const response = await fetch('/translate', {
+      const response = await fetch(`${API_BASE}/translate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ q: textToTranslate }),
@@ -363,7 +365,7 @@ export default function App() {
   const handleTranslateWordEditor = async () => {
     setIsTranslatingWord(true);
     try {
-      const wRes = await fetch('/translate', {
+      const wRes = await fetch(`${API_BASE}/translate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ q: editingWord }),
@@ -372,7 +374,7 @@ export default function App() {
       if (wData.translatedText) setEditingWordTrans(wData.translatedText);
 
       if (editingRoot) {
-        const rRes = await fetch('/translate', {
+        const rRes = await fetch(`${API_BASE}/translate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ q: editingRoot }),
@@ -398,7 +400,7 @@ export default function App() {
       let response;
       
       if (editingWordId) {
-        response = await fetch(`/api/update-word/${editingWordId}`, {
+        response = await fetch(`${API_BASE}/api/update-word/${editingWordId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -417,7 +419,7 @@ export default function App() {
             root_translation: editingRootTrans
             }]
         };
-        response = await fetch('/add-words', {
+        response = await fetch(`${API_BASE}/add-words`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -453,7 +455,7 @@ export default function App() {
     if (missingWords.length === 0) return;
     setIsProcessingWords(true);
     try {
-      const response = await fetch('/suggest-words-isri', {
+      const response = await fetch(`${API_BASE}/suggest-words-isri`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ words: missingWords })
@@ -484,7 +486,7 @@ export default function App() {
 
     setIsProcessingWords(true);
     try {
-      const response = await fetch('/add-words', {
+      const response = await fetch(`${API_BASE}/add-words`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items: wordsToAdd })
@@ -517,7 +519,7 @@ export default function App() {
 			if (!ambiguityModal) return;
 			
 			try {
-					const response = await fetch('/api/link-word', {
+					const response = await fetch(`${API_BASE}/api/link-word`, {
 							method: 'POST',
 							headers: { 'Content-Type': 'application/json' },
 							body: JSON.stringify({
@@ -553,7 +555,7 @@ export default function App() {
     if (!selectedSentenceId) return;
     
     try {
-        const response = await fetch(`/api/delete-sentence/${selectedSentenceId}`, { method: 'DELETE' });
+        const response = await fetch(`${API_BASE}/api/delete-sentence/${selectedSentenceId}`, { method: 'DELETE' });
         if (response.ok) {
             await fetchData();
             setDeleteConfirmSentence(false); 
@@ -580,7 +582,7 @@ export default function App() {
     if (!editingWordId) return; 
 
     try {
-        const response = await fetch(`/api/delete-word/${editingWordId}`, { method: 'DELETE' });
+        const response = await fetch(`${API_BASE}/api/delete-word/${editingWordId}`, { method: 'DELETE' });
         const result = await response.json();
         
         if (result.success) {
@@ -612,7 +614,7 @@ export default function App() {
     const textToSend = isEditingSentence ? editingSentenceText : selectedSentence.plaintext;
     
     try {
-        const response = await fetch(`/api/update-sentence/${selectedSentenceId}`, {
+        const response = await fetch(`${API_BASE}/api/update-sentence/${selectedSentenceId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
@@ -634,7 +636,7 @@ export default function App() {
 
   const handleCreateSentence = async () => {
     try {
-        const response = await fetch('/api/create-sentence', {
+        const response = await fetch(`${API_BASE}/api/create-sentence`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
