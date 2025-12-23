@@ -5,7 +5,7 @@ from deep_translator import GoogleTranslator
 from tashaphyne.stemming import ArabicLightStemmer
 import nltk
 from nltk.stem.isri import ISRIStemmer
-import re
+# import re
 import string
 
 main = Blueprint('main', __name__)
