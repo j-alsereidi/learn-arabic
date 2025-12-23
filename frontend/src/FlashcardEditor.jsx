@@ -6,7 +6,7 @@ import {
   ChevronRight,
   ChevronLeft,
   AlertCircle,
-  Loader // Added missing import
+  Loader 
 } from 'lucide-react';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
@@ -88,6 +88,10 @@ const FlashcardEditor = () => {
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isFlipped, setIsFlipped] = useState(false);
     const [sessionStats, setSessionStats] = useState({ reviewed: 0, correct: 0 });
+    
+    // Animation State
+    const [slideDirection, setSlideDirection] = useState('none'); // 'none', 'next-out', 'next-in', 'prev-out', 'prev-in'
+    const [isAnimating, setIsAnimating] = useState(false);
 
     // Data for interactive back
     const [words, setWords] = useState([]);
@@ -125,19 +129,47 @@ const FlashcardEditor = () => {
         fetchCards();
     }, []);
 
-    const handleNext = () => {
-        setIsFlipped(false);
-        setTimeout(() => {
-            setCurrentIndex((prev) => (prev + 1) % cards.length);
-        }, 300); // Wait for flip back
-    };
+    const changeCard = (direction) => {
+    if (isAnimating) return;
+    setIsAnimating(true);
 
-    const handlePrev = () => {
+    // 1. Slide OUT (without resetting flip yet)
+    setSlideDirection(direction === 'next' ? 'next-out' : 'prev-out');
+
+    setTimeout(() => {
+        // Reset flip AFTER out animation, so back shows during out if it was flipped
         setIsFlipped(false);
-        setTimeout(() => {
+
+        // 2. Change Index (while hidden/offscreen)
+        if (direction === 'next') {
+            setCurrentIndex((prev) => (prev + 1) % cards.length);
+        } else {
             setCurrentIndex((prev) => (prev - 1 + cards.length) % cards.length);
-        }, 300);
-    };
+        }
+        
+        // 3. Prepare to Slide IN
+        // We set it to the 'start' position of the IN animation
+        setSlideDirection(direction === 'next' ? 'next-in-start' : 'prev-in-start');
+
+        // Small delay to allow React to render the new card at the start position (invisible/offscreen)
+        // before we transition it to the center.
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                 setSlideDirection(direction === 'next' ? 'next-in-end' : 'prev-in-end');
+                 
+                 // 4. Cleanup after animation
+                 setTimeout(() => {
+                     setSlideDirection('none');
+                     setIsAnimating(false);
+                 }, 300); // Duration of the IN animation
+            });
+        });
+
+    }, 300); // Duration of the OUT animation
+};
+    
+    const handleNext = () => changeCard('next');
+    const handlePrev = () => changeCard('prev');
 
     const handleRate = (isCorrect) => {
         setSessionStats(prev => ({
@@ -173,8 +205,26 @@ const FlashcardEditor = () => {
 
     const currentCard = cards[currentIndex];
 
+    // Determine animation styles based on state
+    let transformClass = "translate-x-0 opacity-100";
+    let durationClass = "duration-300"; // Default duration
+
+    if (slideDirection === 'next-out') {
+        transformClass = "-translate-x-[120%] opacity-0 rotate-[-5deg]";
+    } else if (slideDirection === 'prev-out') {
+        transformClass = "translate-x-[120%] opacity-0 rotate-[5deg]";
+    } else if (slideDirection === 'next-in-start') {
+        transformClass = "translate-x-[120%] opacity-0"; // Start from right
+        durationClass = "duration-0"; // Snap instantly
+    } else if (slideDirection === 'prev-in-start') {
+        transformClass = "-translate-x-[120%] opacity-0"; // Start from left
+        durationClass = "duration-0";
+    } else if (slideDirection === 'next-in-end' || slideDirection === 'prev-in-end') {
+        transformClass = "translate-x-0 opacity-100"; // Slide to center
+    }
+
     return (
-        <div className="h-full flex flex-col items-center max-w-4xl mx-auto py-4 space-y-8 animate-in fade-in duration-500">
+        <div className="h-full flex flex-col items-center max-w-4xl mx-auto py-4 space-y-8 animate-in fade-in duration-500 overflow-x-hidden">
             
             {/* Header Stats */}
             <div className="w-full flex justify-between items-center px-4">
@@ -197,57 +247,65 @@ const FlashcardEditor = () => {
             {/* Main Card Area */}
             <div className="w-full relative group perspective-1000">
                 <div 
+                    key={currentIndex}
                     className={`
-                        relative w-full aspect-[16/10] md:aspect-[2/1] transition-all duration-500 transform-style-3d cursor-pointer
-                        ${isFlipped ? 'rotate-y-180' : ''}
+                        transition-all ease-out ${durationClass} ${transformClass}
                     `}
-                    onClick={() => setIsFlipped(!isFlipped)}
-                >
-                    {/* FRONT */}
-                    <div className="absolute inset-0 backface-hidden">
-                        <div className="h-full w-full bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 rounded-3xl shadow-2xl flex flex-col items-center justify-center p-8 md:p-12 hover:border-indigo-500/30 transition-colors">
-                            <span className="absolute top-6 left-6 text-[10px] font-bold tracking-widest text-slate-600 uppercase">
-                                Arabic
-                            </span>
-                            
-                            <h2 className="text-4xl md:text-6xl font-arabic text-white text-center leading-relaxed drop-shadow-lg">
-                                {currentCard.plaintext}
-                            </h2>
+                > {/* New slide wrapper: handles translate/opacity */}
+                    <div 
+                        className={`
+                            relative w-full aspect-[16/10] md:aspect-[2/1] transform-style-3d cursor-pointer
+                            transition-all duration-300  // Keep flip duration separate
+                            ${isFlipped ? 'rotate-y-180' : ''}
+                        `}
+                        onClick={() => !isAnimating && setIsFlipped(!isFlipped)}
+                    >
+                        {/* FRONT */}
+                        <div className="absolute inset-0 backface-hidden">
+                            <div className="h-full w-full bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 rounded-3xl shadow-2xl flex flex-col items-center justify-center p-8 md:p-12 hover:border-indigo-500/30 transition-colors">
+                                <span className="absolute top-6 left-6 text-[10px] font-bold tracking-widest text-slate-600 uppercase">
+                                    Arabic
+                                </span>
+                                
+                                <h2 className="text-4xl md:text-6xl font-arabic text-white text-center leading-relaxed drop-shadow-lg">
+                                    {currentCard.plaintext}
+                                </h2>
 
-                            <div className="absolute bottom-6 flex items-center gap-2 text-slate-600 text-xs font-medium opacity-50 group-hover:opacity-100 transition-opacity">
-                                <RotateCw className="w-3 h-3" /> Click to flip
+                                <div className="absolute bottom-6 flex items-center gap-2 text-slate-600 text-xs font-medium opacity-50 group-hover:opacity-100 transition-opacity">
+                                    <RotateCw className="w-3 h-3" /> Click to flip
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    {/* BACK */}
-                    <div className="absolute inset-0 backface-hidden rotate-y-180">
-                        <div className="h-full w-full bg-slate-900 border border-indigo-500/30 rounded-3xl shadow-2xl shadow-indigo-900/10 flex flex-col items-center justify-center p-8 md:p-12 relative overflow-hidden">
-                            {/* Decorative background blob */}
-                            <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
-                            
-                            <span className="absolute top-6 left-6 text-[10px] font-bold tracking-widest text-indigo-400 uppercase">
-                                Analysis & Translation
-                            </span>
+                        {/* BACK */}
+                        <div className="absolute inset-0 backface-hidden rotate-y-180">
+                            <div className="h-full w-full bg-slate-900 border border-indigo-500/30 rounded-3xl shadow-2xl shadow-indigo-900/10 flex flex-col items-center justify-center p-8 md:p-12 relative overflow-hidden">
+                                {/* Decorative background blob */}
+                                <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
+                                
+                                <span className="absolute top-6 left-6 text-[10px] font-bold tracking-widest text-indigo-400 uppercase">
+                                    Analysis & Translation
+                                </span>
 
-                            {/* Interactive Arabic Sentence */}
-                            <div className="mb-8 w-full">
-                                <InteractiveSentence 
-                                    sentence={currentCard} 
-                                    words={words} 
-                                    roots={roots} 
-                                    wordInstances={wordInstances} 
-                                />
+                                {/* Interactive Arabic Sentence */}
+                                <div className="mb-8 w-full">
+                                    <InteractiveSentence 
+                                        sentence={currentCard} 
+                                        words={words} 
+                                        roots={roots} 
+                                        wordInstances={wordInstances} 
+                                    />
+                                </div>
+
+                                {/* Translation */}
+                                <div className="relative">
+                                    <div className="absolute -inset-4 bg-indigo-500/5 blur-lg rounded-full"></div>
+                                    <p className="relative text-xl md:text-2xl text-indigo-100 font-medium text-center max-w-2xl leading-relaxed">
+                                        "{currentCard.translation}"
+                                    </p>
+                                </div>
+
                             </div>
-
-                            {/* Translation */}
-                            <div className="relative">
-                                <div className="absolute -inset-4 bg-indigo-500/5 blur-lg rounded-full"></div>
-                                <p className="relative text-xl md:text-2xl text-indigo-100 font-medium text-center max-w-2xl leading-relaxed">
-                                    "{currentCard.translation}"
-                                </p>
-                            </div>
-
                         </div>
                     </div>
                 </div>
@@ -257,7 +315,8 @@ const FlashcardEditor = () => {
             <div className="flex items-center gap-6 md:gap-12">
                 <button 
                     onClick={(e) => { e.stopPropagation(); handleRate(false); }}
-                    className="flex flex-col items-center gap-2 group"
+                    disabled={isAnimating}
+                    className="flex flex-col items-center gap-2 group disabled:opacity-50"
                 >
                     <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 text-rose-500 flex items-center justify-center shadow-lg transition-all duration-200 group-hover:bg-rose-500 group-hover:text-white group-hover:-translate-y-1 group-active:scale-95">
                         <ThumbsDown className="w-6 h-6" />
@@ -268,13 +327,15 @@ const FlashcardEditor = () => {
                 <div className="flex gap-2">
                     <button 
                         onClick={handlePrev}
-                        className="w-10 h-10 rounded-full bg-slate-900 border border-slate-800 text-slate-400 flex items-center justify-center hover:bg-slate-800 hover:text-white transition-all"
+                        disabled={isAnimating}
+                        className="w-10 h-10 rounded-full bg-slate-900 border border-slate-800 text-slate-400 flex items-center justify-center hover:bg-slate-800 hover:text-white transition-all disabled:opacity-50"
                     >
                         <ChevronLeft className="w-5 h-5" />
                     </button>
                     <button 
                         onClick={handleNext}
-                        className="w-10 h-10 rounded-full bg-slate-900 border border-slate-800 text-slate-400 flex items-center justify-center hover:bg-slate-800 hover:text-white transition-all"
+                        disabled={isAnimating}
+                        className="w-10 h-10 rounded-full bg-slate-900 border border-slate-800 text-slate-400 flex items-center justify-center hover:bg-slate-800 hover:text-white transition-all disabled:opacity-50"
                     >
                         <ChevronRight className="w-5 h-5" />
                     </button>
@@ -282,7 +343,8 @@ const FlashcardEditor = () => {
 
                 <button 
                     onClick={(e) => { e.stopPropagation(); handleRate(true); }}
-                    className="flex flex-col items-center gap-2 group"
+                    disabled={isAnimating}
+                    className="flex flex-col items-center gap-2 group disabled:opacity-50"
                 >
                     <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 text-emerald-500 flex items-center justify-center shadow-lg transition-all duration-200 group-hover:bg-emerald-500 group-hover:text-white group-hover:-translate-y-1 group-active:scale-95">
                         <ThumbsUp className="w-6 h-6" />
