@@ -11,39 +11,31 @@ import {
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
-// --- Helpers (Reused logic) ---
+// --- Helpers ---
 const stripDiacritics = (text) => {
     if (!text) return "";
     return text
         .normalize('NFD')
         .replace(/[\u064B-\u065F\u0640\u0670]/g, '')
-        .replace(/[؟،!.,;:]/g, ''); 
+        .replace(/[،؛؟!.,;:]/g, ''); 
 };
 
 // --- Sub-Components ---
-
-const InteractiveSentence = ({ sentence, words, roots, wordInstances }) => {
-    // Removed unused state highlightedWordId
-
+const InteractiveSentence = ({ sentence, words, roots, wordInstances, localKnown, setLocalKnown }) => {
     const tokens = sentence.plaintext.split(' ').map((token, index) => {
         const explicitLink = wordInstances.find(i => i.sentence_id === sentence.sentence_id && i.index === index);
         let match = null;
-        let status = 'missing'; // eslint-disable-line no-unused-vars
 
         if (explicitLink) {
             match = words.find(w => w.word_id === explicitLink.word_id);
-            if (match) status = 'linked';
         } else {
-            const cleanToken = token.replace(/[؟،!.,;:]/g, '');
+            const cleanToken = token.replace(/[،؛؟!.,;:]/g, '');
             match = words.find(w => w.plaintext === cleanToken || w.plaintext === token);
-            if (match) {
-                status = 'exact';
-            } else {
+            if (!match) {
                 const prunedToken = stripDiacritics(cleanToken);
                 const fuzzyMatches = words.filter(w => w.prune === prunedToken);
                 if (fuzzyMatches.length === 1) {
                     match = fuzzyMatches[0];
-                    status = 'inferred';
                 }
             }
         }
@@ -53,50 +45,73 @@ const InteractiveSentence = ({ sentence, words, roots, wordInstances }) => {
     });
 
     return (
-        <div className="flex flex-wrap justify-center gap-3 text-3xl md:text-4xl leading-relaxed font-arabic text-white" dir="rtl">
-            {tokens.map((t, idx) => (
-                <div key={idx} className="relative group">
-                    <span 
-                        className={`
-                            px-1 rounded-md transition-colors duration-200 cursor-help
-                            ${t.match ? 'hover:text-indigo-300' : ''}
-                        `}
-                    >
-                        {t.text}
-                    </span>
-                    
-                    {/* Tooltip */}
-                    {t.match && (
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 opacity-0 group-hover:opacity-100 transition-all duration-200 pointer-events-none z-20">
-                            <div className="bg-slate-800 text-xs rounded-lg shadow-xl border border-slate-700 p-2 min-w-[100px] text-center">
-                                <div className="font-bold text-indigo-400 mb-0.5">{t.rootData?.plaintext || 'No Root'}</div>
-                                <div className="text-slate-300">{t.rootData?.translation}</div>
-                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+        <div className="flex flex-wrap justify-center gap-3 text-3xl md:text-4xl leading-relaxed font-arabic" dir="rtl">
+            {tokens.map((t, idx) => {
+                const wordId = t.match?.word_id;
+                const isKnown = wordId ? (localKnown[wordId] ?? t.match?.known ?? false) : false;
+
+                return (
+                    <div key={idx} className="relative inline-block group">
+                        <span
+                            onClick={async (e) => {
+                                e.stopPropagation();
+                                if (!t.match || !wordId) return;
+
+                                const newKnown = !isKnown;
+                                setLocalKnown(prev => ({ ...prev, [wordId]: newKnown }));
+                            }}
+                            className={`
+                                relative px-1 cursor-pointer transition-all duration-300 select-none
+                                ${isKnown ? 'text-emerald-300' : 'text-rose-400'}
+                                ${t.match 
+                                    ? (isKnown 
+                                        ? 'hover:text-emerald-200 drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]' 
+                                        : 'hover:text-rose-300 drop-shadow-[0_0_8px_rgba(251,113,133,0.5)]')
+                                    : 'text-rose-400/50 opacity-70'
+                                }
+                            `}
+                            style={t.match ? {
+                                filter: `drop-shadow(0 0 ${isKnown ? '1px rgba(52, 211, 153, 0.4)' : '1px rgba(251, 113, 133, 0.4)'})`
+                            } : {}}
+                        >
+                            {t.text}
+                        </span>
+
+                        {t.match && (
+                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none z-20">
+                                <div className="bg-slate-800 text-xs rounded-lg shadow-xl border border-slate-700 p-2 min-w-[120px] text-center">
+                                    <div className="font-bold text-indigo-400 mb-0.5">
+                                        {t.rootData?.plaintext || 'No Root'}
+                                    </div>
+                                    <div className="text-slate-300">
+                                        {t.rootData?.translation || 'No translation'}
+                                    </div>
+                                    <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
+                                </div>
                             </div>
-                        </div>
-                    )}
-                </div>
-            ))}
+                        )}
+                    </div>
+                );
+            })}
         </div>
     );
 };
 
 const FlashcardEditor = () => {
-    // State
     const [loading, setLoading] = useState(true);
-    const [cards, setCards] = useState([]); // These will be the 'complete' sentences
+    const [cards, setCards] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isFlipped, setIsFlipped] = useState(false);
     const [sessionStats, setSessionStats] = useState({ reviewed: 0, correct: 0 });
     
-    // Animation State
-    const [slideDirection, setSlideDirection] = useState('none'); // 'none', 'next-out', 'next-in', 'prev-out', 'prev-in'
+    const [slideDirection, setSlideDirection] = useState('none');
     const [isAnimating, setIsAnimating] = useState(false);
 
-    // Data for interactive back
     const [words, setWords] = useState([]);
     const [roots, setRoots] = useState([]);
     const [wordInstances, setWordInstances] = useState([]);
+
+    const [localKnown, setLocalKnown] = useState({});
 
     useEffect(() => {
         const fetchCards = async () => {
@@ -113,7 +128,6 @@ const FlashcardEditor = () => {
                     sRes.json(), wRes.json(), rRes.json(), iRes.json()
                 ]);
 
-                // Filter for COMPLETE sentences only
                 const validCards = sData.filter(s => s.complete);
                 setCards(validCards);
                 
@@ -130,44 +144,59 @@ const FlashcardEditor = () => {
     }, []);
 
     const changeCard = (direction) => {
-    if (isAnimating) return;
-    setIsAnimating(true);
+        if (isAnimating || cards.length === 0) return;
+        setIsAnimating(true);
 
-    // 1. Slide OUT (without resetting flip yet)
-    setSlideDirection(direction === 'next' ? 'next-out' : 'prev-out');
+        setSlideDirection(direction === 'next' ? 'next-out' : 'prev-out');
 
-    setTimeout(() => {
-        // Reset flip AFTER out animation, so back shows during out if it was flipped
-        setIsFlipped(false);
+        setTimeout(async () => {
+            const pending = Object.keys(localKnown).filter(
+                id => localKnown[id] !== words.find(w => w.word_id === Number(id))?.known
+            );
 
-        // 2. Change Index (while hidden/offscreen)
-        if (direction === 'next') {
-            setCurrentIndex((prev) => (prev + 1) % cards.length);
-        } else {
-            setCurrentIndex((prev) => (prev - 1 + cards.length) % cards.length);
-        }
-        
-        // 3. Prepare to Slide IN
-        // We set it to the 'start' position of the IN animation
-        setSlideDirection(direction === 'next' ? 'next-in-start' : 'prev-in-start');
+            if (pending.length > 0) {
+                await Promise.all(
+                    pending.map(id =>
+                        fetch(`${API_BASE}/api/toggle-known/${id}`, { method: 'POST' })
+                            .catch(err => console.error(`Failed to save word ${id}:`, err))
+                    )
+                );
+                
+                // Update words array to reflect the saved changes
+                setWords(prev => prev.map(w => {
+                    const newKnown = localKnown[w.word_id];
+                    if (newKnown !== undefined) {
+                        return { ...w, known: newKnown };
+                    }
+                    return w;
+                }));
+                
+                setLocalKnown({});
+            }
 
-        // Small delay to allow React to render the new card at the start position (invisible/offscreen)
-        // before we transition it to the center.
-        requestAnimationFrame(() => {
+            setIsFlipped(false);
+
+            setCurrentIndex(prev =>
+                direction === 'next'
+                    ? (prev + 1) % cards.length
+                    : (prev - 1 + cards.length) % cards.length
+            );
+
+            setSlideDirection(direction === 'next' ? 'next-in-start' : 'prev-in-start');
+
             requestAnimationFrame(() => {
-                 setSlideDirection(direction === 'next' ? 'next-in-end' : 'prev-in-end');
-                 
-                 // 4. Cleanup after animation
-                 setTimeout(() => {
-                     setSlideDirection('none');
-                     setIsAnimating(false);
-                 }, 300); // Duration of the IN animation
-            });
-        });
+                requestAnimationFrame(() => {
+                    setSlideDirection(direction === 'next' ? 'next-in-end' : 'prev-in-end');
 
-    }, 300); // Duration of the OUT animation
-};
-    
+                    setTimeout(() => {
+                        setSlideDirection('none');
+                        setIsAnimating(false);
+                    }, 300);
+                });
+            });
+        }, 300);
+    };
+
     const handleNext = () => changeCard('next');
     const handlePrev = () => changeCard('prev');
 
@@ -205,28 +234,26 @@ const FlashcardEditor = () => {
 
     const currentCard = cards[currentIndex];
 
-    // Determine animation styles based on state
     let transformClass = "translate-x-0 opacity-100";
-    let durationClass = "duration-300"; // Default duration
+    let durationClass = "duration-300";
 
     if (slideDirection === 'next-out') {
         transformClass = "-translate-x-[120%] opacity-0 rotate-[-5deg]";
     } else if (slideDirection === 'prev-out') {
         transformClass = "translate-x-[120%] opacity-0 rotate-[5deg]";
     } else if (slideDirection === 'next-in-start') {
-        transformClass = "translate-x-[120%] opacity-0"; // Start from right
-        durationClass = "duration-0"; // Snap instantly
+        transformClass = "translate-x-[120%] opacity-0";
+        durationClass = "duration-0";
     } else if (slideDirection === 'prev-in-start') {
-        transformClass = "-translate-x-[120%] opacity-0"; // Start from left
+        transformClass = "-translate-x-[120%] opacity-0";
         durationClass = "duration-0";
     } else if (slideDirection === 'next-in-end' || slideDirection === 'prev-in-end') {
-        transformClass = "translate-x-0 opacity-100"; // Slide to center
+        transformClass = "translate-x-0 opacity-100";
     }
 
     return (
         <div className="h-full flex flex-col items-center max-w-4xl mx-auto py-4 space-y-8 animate-in fade-in duration-500 overflow-x-hidden">
             
-            {/* Header Stats */}
             <div className="w-full flex justify-between items-center px-4">
                 <div className="flex items-center gap-2">
                     <div className="h-2 w-32 bg-slate-800 rounded-full overflow-hidden">
@@ -244,24 +271,20 @@ const FlashcardEditor = () => {
                 </div>
             </div>
 
-            {/* Main Card Area */}
-            <div className="w-full relative group perspective-1000">
+            <div className="w-full relative perspective-1000">
                 <div 
                     key={currentIndex}
-                    className={`
-                        transition-all ease-out ${durationClass} ${transformClass}
-                    `}
-                > {/* New slide wrapper: handles translate/opacity */}
+                    className={`transition-all ease-out ${durationClass} ${transformClass}`}
+                >
                     <div 
                         className={`
                             relative w-full aspect-[16/10] md:aspect-[2/1] transform-style-3d cursor-pointer
-                            transition-all duration-300  // Keep flip duration separate
+                            transition-all duration-300
                             ${isFlipped ? 'rotate-y-180' : ''}
                         `}
-                        onClick={() => !isAnimating && setIsFlipped(!isFlipped)}
+                        onClick={() => !isAnimating && setIsFlipped(prev => !prev)}
                     >
-                        {/* FRONT */}
-                        <div className="absolute inset-0 backface-hidden">
+                        <div className="absolute inset-0 backface-hidden group">
                             <div className="h-full w-full bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 rounded-3xl shadow-2xl flex flex-col items-center justify-center p-8 md:p-12 hover:border-indigo-500/30 transition-colors">
                                 <span className="absolute top-6 left-6 text-[10px] font-bold tracking-widest text-slate-600 uppercase">
                                     Arabic
@@ -277,41 +300,37 @@ const FlashcardEditor = () => {
                             </div>
                         </div>
 
-                        {/* BACK */}
                         <div className="absolute inset-0 backface-hidden rotate-y-180">
                             <div className="h-full w-full bg-slate-900 border border-indigo-500/30 rounded-3xl shadow-2xl shadow-indigo-900/10 flex flex-col items-center justify-center p-8 md:p-12 relative overflow-hidden">
-                                {/* Decorative background blob */}
                                 <div className="absolute -top-24 -right-24 w-48 h-48 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
                                 
                                 <span className="absolute top-6 left-6 text-[10px] font-bold tracking-widest text-indigo-400 uppercase">
                                     Analysis & Translation
                                 </span>
 
-                                {/* Interactive Arabic Sentence */}
                                 <div className="mb-8 w-full">
                                     <InteractiveSentence 
                                         sentence={currentCard} 
                                         words={words} 
                                         roots={roots} 
-                                        wordInstances={wordInstances} 
+                                        wordInstances={wordInstances}
+                                        localKnown={localKnown}
+                                        setLocalKnown={setLocalKnown}
                                     />
                                 </div>
 
-                                {/* Translation */}
                                 <div className="relative">
                                     <div className="absolute -inset-4 bg-indigo-500/5 blur-lg rounded-full"></div>
                                     <p className="relative text-xl md:text-2xl text-indigo-100 font-medium text-center max-w-2xl leading-relaxed">
                                         "{currentCard.translation}"
                                     </p>
                                 </div>
-
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            {/* Controls */}
             <div className="flex items-center gap-6 md:gap-12">
                 <button 
                     onClick={(e) => { e.stopPropagation(); handleRate(false); }}
@@ -353,7 +372,6 @@ const FlashcardEditor = () => {
                 </button>
             </div>
 
-            {/* Styles for 3D Flip */}
             <style>{`
                 .perspective-1000 { perspective: 1000px; }
                 .transform-style-3d { transform-style: preserve-3d; }

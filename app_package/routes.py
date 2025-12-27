@@ -500,3 +500,18 @@ def twilio_webhook():
     except Exception as e:
         db.session.rollback()
         return Response("<Response><Message>Error</Message></Response>", mimetype='text/xml')
+
+@main.route('/api/toggle-known/<int:word_id>', methods=['POST'])
+def toggle_known(word_id):
+    try:
+        word = Word.query.get(word_id)
+        if not word:
+            return jsonify({'error': 'Word not found'}), 404
+        
+        word.known = not word.known
+        db.session.commit()
+        
+        return jsonify({'success': True, 'new_known': word.known})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
