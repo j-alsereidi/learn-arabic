@@ -21,7 +21,14 @@ const stripDiacritics = (text) => {
 };
 
 // --- Sub-Components ---
-const InteractiveSentence = ({ sentence, words, roots, wordInstances, localKnown, setLocalKnown }) => {
+const InteractiveSentence = ({ 
+    sentence, 
+    words, 
+    roots, 
+    wordInstances, 
+    stagedChanges, 
+    toggleWordStage 
+}) => {
     const tokens = sentence.plaintext.split(' ').map((token, index) => {
         const explicitLink = wordInstances.find(i => i.sentence_id === sentence.sentence_id && i.index === index);
         let match = null;
@@ -48,17 +55,21 @@ const InteractiveSentence = ({ sentence, words, roots, wordInstances, localKnown
         <div className="flex flex-wrap justify-center gap-3 text-3xl md:text-4xl leading-relaxed font-arabic" dir="rtl">
             {tokens.map((t, idx) => {
                 const wordId = t.match?.word_id;
-                const isKnown = wordId ? (localKnown[wordId] ?? t.match?.known ?? false) : false;
+                
+                // Logic: Check staged changes first, fallback to original database state
+                // If stagedChanges[wordId] is undefined, it hasn't been touched.
+                const dbKnown = t.match?.known ?? false;
+                const isKnown = wordId && stagedChanges[wordId] !== undefined 
+                    ? stagedChanges[wordId] 
+                    : dbKnown;
 
                 return (
                     <div key={idx} className="relative inline-block group">
                         <span
-                            onClick={async (e) => {
+                            onClick={(e) => {
                                 e.stopPropagation();
                                 if (!t.match || !wordId) return;
-
-                                const newKnown = !isKnown;
-                                setLocalKnown(prev => ({ ...prev, [wordId]: newKnown }));
+                                toggleWordStage(wordId, isKnown);
                             }}
                             className={`
                                 relative px-1 cursor-pointer transition-all duration-300 select-none
@@ -111,7 +122,10 @@ const FlashcardEditor = () => {
     const [roots, setRoots] = useState([]);
     const [wordInstances, setWordInstances] = useState([]);
 
-    const [localKnown, setLocalKnown] = useState({});
+    // Stores manual toggles for the CURRENT card only.
+    // Structure: { [wordId]: boolean }
+    // If a key is missing, it means it hasn't been touched (use DB state).
+    const [stagedChanges, setStagedChanges] = useState({});
 
     useEffect(() => {
         const fetchCards = async () => {
@@ -143,39 +157,48 @@ const FlashcardEditor = () => {
         fetchCards();
     }, []);
 
+    // Reset staged changes when card index changes
+    useEffect(() => {
+        setStagedChanges({});
+        setIsFlipped(false);
+    }, [currentIndex]);
+
+    const toggleWordStage = (wordId, currentKnownStatus) => {
+        setStagedChanges(prev => ({
+            ...prev,
+            [wordId]: !currentKnownStatus
+        }));
+    };
+
+    const persistChanges = async (updates) => {
+        // updates is an array of { id, known }
+        if (updates.length === 0) return;
+
+        // 1. Update Backend
+        await Promise.all(
+            updates.map(({ id }) => 
+                fetch(`${API_BASE}/api/toggle-known/${id}`, { method: 'POST' })
+                    .catch(err => console.error(`Failed to save word ${id}:`, err))
+            )
+        );
+
+        // 2. Update Frontend State (Words)
+        setWords(prev => prev.map(w => {
+            const update = updates.find(u => u.id === w.word_id);
+            if (update) {
+                return { ...w, known: update.known };
+            }
+            return w;
+        }));
+    };
+
     const changeCard = (direction) => {
         if (isAnimating || cards.length === 0) return;
         setIsAnimating(true);
-
         setSlideDirection(direction === 'next' ? 'next-out' : 'prev-out');
 
-        setTimeout(async () => {
-            const pending = Object.keys(localKnown).filter(
-                id => localKnown[id] !== words.find(w => w.word_id === Number(id))?.known
-            );
-
-            if (pending.length > 0) {
-                await Promise.all(
-                    pending.map(id =>
-                        fetch(`${API_BASE}/api/toggle-known/${id}`, { method: 'POST' })
-                            .catch(err => console.error(`Failed to save word ${id}:`, err))
-                    )
-                );
-                
-                // Update words array to reflect the saved changes
-                setWords(prev => prev.map(w => {
-                    const newKnown = localKnown[w.word_id];
-                    if (newKnown !== undefined) {
-                        return { ...w, known: newKnown };
-                    }
-                    return w;
-                }));
-                
-                setLocalKnown({});
-            }
-
-            setIsFlipped(false);
-
+        setTimeout(() => {
+            // NOTE: We do NOT save on simple navigation (Prev/Next), we just reset.
             setCurrentIndex(prev =>
                 direction === 'next'
                     ? (prev + 1) % cards.length
@@ -187,7 +210,6 @@ const FlashcardEditor = () => {
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => {
                     setSlideDirection(direction === 'next' ? 'next-in-end' : 'prev-in-end');
-
                     setTimeout(() => {
                         setSlideDirection('none');
                         setIsAnimating(false);
@@ -197,16 +219,68 @@ const FlashcardEditor = () => {
         }, 300);
     };
 
+    // --- Button Logic ---
+
+    // HARD: Submit only what was manually staged
+    const handleHard = async () => {
+        const changesToSubmit = Object.entries(stagedChanges).map(([idStr, val]) => ({
+            id: Number(idStr),
+            known: val
+        }));
+
+        await persistChanges(changesToSubmit);
+        
+        setSessionStats(prev => ({ ...prev, reviewed: prev.reviewed + 1 }));
+        changeCard('next');
+    };
+
+    // EASY: Reset staged, Find all unknown words in sentence, Mark them known, Submit.
+    const handleEasy = async () => {
+        const currentCard = cards[currentIndex];
+        
+        // 1. Identify all words in current sentence
+        const sentenceTokens = currentCard.plaintext.split(' ');
+        const wordIdsInSentence = new Set();
+
+        sentenceTokens.forEach((token, index) => {
+            // Try explicit link
+            const explicit = wordInstances.find(i => i.sentence_id === currentCard.sentence_id && i.index === index);
+            if (explicit) {
+                wordIdsInSentence.add(explicit.word_id);
+                return;
+            }
+            // Try text match
+            const cleanToken = token.replace(/[،؛؟!.,;:]/g, '');
+            let match = words.find(w => w.plaintext === cleanToken || w.plaintext === token);
+            if (!match) {
+                 const pruned = stripDiacritics(cleanToken);
+                 const fuzzy = words.filter(w => w.prune === pruned);
+                 if (fuzzy.length === 1) match = fuzzy[0];
+            }
+            if (match) wordIdsInSentence.add(match.word_id);
+        });
+
+        // 2. Find which of these are currently UNKNOWN in the database
+        // (We ignore stagedChanges here as per instructions: "toggles tempKnown for every staged index" -> essentially reverting manual changes before applying "Easy" logic)
+        const unknownWords = Array.from(wordIdsInSentence).filter(id => {
+            const w = words.find(wd => wd.word_id === id);
+            return w && !w.known;
+        });
+
+        // 3. Prepare updates: set all unknown words to KNOWN
+        const updates = unknownWords.map(id => ({ id, known: true }));
+
+        await persistChanges(updates);
+
+        setSessionStats(prev => ({ 
+            reviewed: prev.reviewed + 1, 
+            correct: prev.correct + 1 
+        }));
+        changeCard('next');
+    };
+
     const handleNext = () => changeCard('next');
     const handlePrev = () => changeCard('prev');
-
-    const handleRate = (isCorrect) => {
-        setSessionStats(prev => ({
-            reviewed: prev.reviewed + 1,
-            correct: prev.correct + (isCorrect ? 1 : 0)
-        }));
-        handleNext();
-    };
 
     if (loading) {
         return (
@@ -314,8 +388,8 @@ const FlashcardEditor = () => {
                                         words={words} 
                                         roots={roots} 
                                         wordInstances={wordInstances}
-                                        localKnown={localKnown}
-                                        setLocalKnown={setLocalKnown}
+                                        stagedChanges={stagedChanges}
+                                        toggleWordStage={toggleWordStage}
                                     />
                                 </div>
 
@@ -333,7 +407,7 @@ const FlashcardEditor = () => {
 
             <div className="flex items-center gap-6 md:gap-12">
                 <button 
-                    onClick={(e) => { e.stopPropagation(); handleRate(false); }}
+                    onClick={(e) => { e.stopPropagation(); handleHard(); }}
                     disabled={isAnimating}
                     className="flex flex-col items-center gap-2 group disabled:opacity-50"
                 >
@@ -361,7 +435,7 @@ const FlashcardEditor = () => {
                 </div>
 
                 <button 
-                    onClick={(e) => { e.stopPropagation(); handleRate(true); }}
+                    onClick={(e) => { e.stopPropagation(); handleEasy(); }}
                     disabled={isAnimating}
                     className="flex flex-col items-center gap-2 group disabled:opacity-50"
                 >
