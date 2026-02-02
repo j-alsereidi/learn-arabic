@@ -5,7 +5,7 @@ from deep_translator import GoogleTranslator
 from tashaphyne.stemming import ArabicLightStemmer
 import nltk
 from nltk.stem.isri import ISRIStemmer
-# import re
+from .llm_wrapper import generate_constrained_sentence
 import string
 
 main = Blueprint('main', __name__)
@@ -29,7 +29,7 @@ def clean_punctuation(text):
 def calculate_completeness(sentence):
     """
     Determines if a sentence is complete based on database state.
-    Complete = 
+    Complete =
     1. Sentence has a translation (and is not empty).
     2. All words are resolved (linked via WordInstance OR exact match OR unique fuzzy match).
     """
@@ -40,10 +40,10 @@ def calculate_completeness(sentence):
         return False
 
     tokens = sentence.plaintext.split()
-    
+
     # Get explicit instances for this sentence
     instances = {i.index: i.word_id for i in WordInstance.query.filter_by(sentence_id=sentence.sentence_id).all()}
-    
+
     for idx, raw_token in enumerate(tokens):
         # 2. Check Explicit Link (WordInstance)
         if idx in instances:
@@ -52,7 +52,7 @@ def calculate_completeness(sentence):
         # 3. Clean punctuation
         token = clean_punctuation(raw_token)
         if not token:
-            continue # Ignore pure punctuation
+            continue  # Ignore pure punctuation
 
         # 4. Check Exact Match
         exact_matches = Word.query.filter_by(plaintext=token).first()
@@ -62,16 +62,16 @@ def calculate_completeness(sentence):
         # 5. Check Pruned/Fuzzy Match (for Ambiguity)
         tashaphyne_stemmer.light_stem(token)
         pruned_token = tashaphyne_stemmer.get_unvocalized()
-        
+
         fuzzy_matches = Word.query.filter_by(prune=pruned_token).all()
-        
+
         if len(fuzzy_matches) == 1:
             # Single fuzzy match -> Valid
             continue
-        
+
         # If no match or ambiguous (multiple matches), it's incomplete
         return False
-                
+
     return True
 
 def update_sentence_completeness(sentence):
@@ -79,7 +79,7 @@ def update_sentence_completeness(sentence):
     is_complete = calculate_completeness(sentence)
     if sentence.complete != is_complete:
         sentence.complete = is_complete
-        return True 
+        return True
     return False
 
 # --- API ENDPOINTS ---
@@ -152,7 +152,7 @@ def link_word_instance():
         else:
             instance = WordInstance(sentence_id=sentence_id, word_id=word_id, index=index)
             db.session.add(instance)
-        
+
         sentence = Sentence.query.get(sentence_id)
         if sentence:
             update_sentence_completeness(sentence)
@@ -199,7 +199,7 @@ def translate_text():
     except Exception as e:
         print(f"Translation Error: {e}")
         return jsonify({'error': 'Translation failed', 'details': str(e)}), 500
-    
+
 @main.route('/suggest-words', methods=['POST'])
 def suggest_words():
     data = request.get_json()
@@ -209,7 +209,8 @@ def suggest_words():
 
     for raw_word_text in words_input:
         word_text = clean_punctuation(raw_word_text)
-        if not word_text: continue
+        if not word_text:
+            continue
 
         try:
             tashaphyne_stemmer.light_stem(word_text)
@@ -223,8 +224,13 @@ def suggest_words():
                 'root_plaintext': root_text,
                 'root_translation': root_translation
             })
-        except Exception as e:
-            suggestions.append({'plaintext': word_text, 'translation': "Error", 'root_plaintext': "Error", 'root_translation': "Error"})
+        except Exception:
+            suggestions.append({
+                'plaintext': word_text,
+                'translation': "Error",
+                'root_plaintext': "Error",
+                'root_translation': "Error"
+            })
 
     return jsonify(suggestions)
 
@@ -237,7 +243,8 @@ def suggest_words_isri():
 
     for raw_word_text in words_input:
         word_text = clean_punctuation(raw_word_text)
-        if not word_text: continue
+        if not word_text:
+            continue
 
         try:
             root_text = isri_stemmer.stem(word_text)
@@ -250,8 +257,13 @@ def suggest_words_isri():
                 'root_plaintext': root_text,
                 'root_translation': root_translation
             })
-        except Exception as e:
-            suggestions.append({'plaintext': word_text, 'translation': "Error", 'root_plaintext': "Error", 'root_translation': "Error"})
+        except Exception:
+            suggestions.append({
+                'plaintext': word_text,
+                'translation': "Error",
+                'root_plaintext': "Error",
+                'root_translation': "Error"
+            })
 
     return jsonify(suggestions)
 
@@ -270,7 +282,8 @@ def add_words():
             root_text = item.get('root_plaintext')
             root_trans = item.get('root_translation')
 
-            if not word_text or not root_text: continue
+            if not word_text or not root_text:
+                continue
 
             existing_root = Root.query.filter_by(plaintext=root_text).first()
             if existing_root:
@@ -305,7 +318,7 @@ def add_words():
                 if w in sent.plaintext:
                     update_sentence_completeness(sent)
                     break
-        
+
         db.session.commit()
         return jsonify({'success': True, 'new_roots_count': new_roots_count, 'new_words_count': new_words_count})
     except Exception as e:
@@ -317,7 +330,8 @@ def update_root(root_id):
     data = request.get_json()
     try:
         root = Root.query.get(root_id)
-        if not root: return jsonify({'error': 'Root not found'}), 404
+        if not root:
+            return jsonify({'error': 'Root not found'}), 404
 
         root.plaintext = data.get('plaintext', root.plaintext)
         root.translation = data.get('translation', root.translation)
@@ -333,11 +347,12 @@ def update_word(word_id):
     data = request.get_json()
     try:
         word = Word.query.get(word_id)
-        if not word: return jsonify({'error': 'Word not found'}), 404
+        if not word:
+            return jsonify({'error': 'Word not found'}), 404
 
         old_root_id = word.root_id
         old_plaintext = word.plaintext
-        
+
         new_plaintext = clean_punctuation(data.get('plaintext', ''))
         new_translation = data.get('translation')
         new_root_text = data.get('root_plaintext')
@@ -345,7 +360,7 @@ def update_word(word_id):
 
         word.plaintext = new_plaintext
         word.translation = new_translation
-        
+
         tashaphyne_stemmer.light_stem(new_plaintext)
         word.prune = tashaphyne_stemmer.get_unvocalized()
 
@@ -354,7 +369,8 @@ def update_word(word_id):
         deleted_root = False
 
         if existing_root:
-            if new_root_trans: existing_root.translation = new_root_trans
+            if new_root_trans:
+                existing_root.translation = new_root_trans
             word.root_id = existing_root.root_id
         else:
             new_root = Root(plaintext=new_root_text, translation=new_root_trans)
@@ -374,16 +390,19 @@ def update_word(word_id):
                     deleted_root = True
 
         sents_old = Sentence.query.filter(Sentence.plaintext.like(f'%{old_plaintext}%')).all()
-        for s in sents_old: update_sentence_completeness(s)
-        
+        for s in sents_old:
+            update_sentence_completeness(s)
+
         if new_plaintext != old_plaintext:
             sents_new = Sentence.query.filter(Sentence.plaintext.like(f'%{new_plaintext}%')).all()
-            for s in sents_new: update_sentence_completeness(s)
-            
+            for s in sents_new:
+                update_sentence_completeness(s)
+
         linked = WordInstance.query.filter_by(word_id=word_id).all()
         for inst in linked:
             s = Sentence.query.get(inst.sentence_id)
-            if s: update_sentence_completeness(s)
+            if s:
+                update_sentence_completeness(s)
 
         db.session.commit()
         return jsonify({'success': True, 'new_root_created': new_root_created, 'deleted_root': deleted_root})
@@ -395,8 +414,9 @@ def update_word(word_id):
 def delete_sentence(sentence_id):
     try:
         sentence = Sentence.query.get(sentence_id)
-        if not sentence: return jsonify({'error': 'Sentence not found'}), 404
-        
+        if not sentence:
+            return jsonify({'error': 'Sentence not found'}), 404
+
         WordInstance.query.filter_by(sentence_id=sentence_id).delete()
         db.session.delete(sentence)
         db.session.commit()
@@ -409,14 +429,15 @@ def delete_sentence(sentence_id):
 def delete_word(word_id):
     try:
         word = Word.query.get(word_id)
-        if not word: return jsonify({'error': 'Word not found'}), 404
-        
+        if not word:
+            return jsonify({'error': 'Word not found'}), 404
+
         root_id = word.root_id
         word_plain = word.plaintext
         linked_ids = [i.sentence_id for i in WordInstance.query.filter_by(word_id=word_id).all()]
-        
+
         db.session.delete(word)
-        db.session.flush() 
+        db.session.flush()
 
         deleted_root = False
         if Word.query.filter_by(root_id=root_id).count() == 0:
@@ -424,13 +445,15 @@ def delete_word(word_id):
             if root:
                 db.session.delete(root)
                 deleted_root = True
-        
+
         for sid in linked_ids:
             s = Sentence.query.get(sid)
-            if s: update_sentence_completeness(s)
-            
+            if s:
+                update_sentence_completeness(s)
+
         text_matches = Sentence.query.filter(Sentence.plaintext.like(f'%{word_plain}%')).all()
-        for s in text_matches: update_sentence_completeness(s)
+        for s in text_matches:
+            update_sentence_completeness(s)
 
         db.session.commit()
         return jsonify({'success': True, 'deleted_root': deleted_root})
@@ -443,16 +466,17 @@ def update_sentence(sentence_id):
     data = request.get_json()
     try:
         sentence = Sentence.query.get(sentence_id)
-        if not sentence: return jsonify({'error': 'Sentence not found'}), 404
-        
+        if not sentence:
+            return jsonify({'error': 'Sentence not found'}), 404
+
         old_length = sentence.length
         sentence.plaintext = data.get('plaintext', sentence.plaintext)
         sentence.translation = data.get('translation', sentence.translation)
         sentence.length = len(sentence.plaintext.split())
 
         if old_length != sentence.length:
-            WordInstance.query.filter_by(sentence_id=sentence_id).delete() 
-        
+            WordInstance.query.filter_by(sentence_id=sentence_id).delete()
+
         update_sentence_completeness(sentence)
         db.session.commit()
         return jsonify({'success': True})
@@ -471,7 +495,7 @@ def create_sentence():
             length=len(data.get('plaintext', '').split())
         )
         db.session.add(new_sentence)
-        db.session.flush() 
+        db.session.flush()
         update_sentence_completeness(new_sentence)
         db.session.commit()
         return jsonify({'success': True, 'sentence_id': new_sentence.sentence_id})
@@ -488,7 +512,7 @@ def twilio_webhook():
 
         new_sentence = Sentence(
             plaintext=message_body,
-            translation="", 
+            translation="",
             complete=False,
             length=len(message_body.split())
         )
@@ -496,22 +520,56 @@ def twilio_webhook():
         db.session.flush()
         update_sentence_completeness(new_sentence)
         db.session.commit()
-        return Response(f"<Response><Message>Saved sentence ✅ \"{message_body}\"</Message></Response>", mimetype='text/xml')
-    except Exception as e:
+        return Response(
+            f"<Response><Message>Saved sentence ✅ \"{message_body}\"</Message></Response>",
+            mimetype='text/xml'
+        )
+    except Exception:
         db.session.rollback()
         return Response("<Response><Message>Error</Message></Response>", mimetype='text/xml')
 
-@main.route('/api/toggle-known/<int:word_id>', methods=['POST'])
+@main.route('/api/word/<int:word_id>/toggle_known', methods=['POST'])
 def toggle_known(word_id):
     try:
-        word = Word.query.get(word_id)
-        if not word:
-            return jsonify({'error': 'Word not found'}), 404
-        
+        word = Word.query.get_or_404(word_id)
         word.known = not word.known
         db.session.commit()
-        
         return jsonify({'success': True, 'new_known': word.known})
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+
+# =========================
+# Constrained LLM PoC
+# =========================
+@main.route('/api/llm/constrained', methods=['POST'])
+def api_llm_constrained():
+    """
+    Option C PoC endpoint:
+    Input:
+      {
+        "allowed_words": ["انا","طالب","في","جامعة"],
+        "new_word": "خليفة"
+      }
+    Output:
+      {
+        "text": "...",
+        "tokens": [...],
+        "used_new_word": true/false,
+        "violations": [...]
+      }
+    """
+    data = request.get_json(silent=True) or {}
+
+    allowed_words = data.get('allowed_words', [])
+    new_word = data.get('new_word', None)
+
+    result = generate_constrained_sentence(
+        allowed_words=allowed_words,
+        new_word=new_word,
+        max_allowed_words_used=8,
+    )
+
+    # PoC: always return 200 (even if violations exist) so frontend can display errors nicely
+    return jsonify(result), 200
