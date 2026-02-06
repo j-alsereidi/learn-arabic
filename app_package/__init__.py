@@ -10,7 +10,8 @@ def create_app():
     app = Flask(__name__)
 
     # Enable CORS (adjust origins if you want stricter rules)
-    CORS(app, resources={r"/*": {"origins": ["http://localhost:3000"]}})
+    # CORS(app, resources={r"/*": {"origins": ["http://localhost:3000"]}})
+    CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins for now (adjust in production)
 
     # Database Configuration
     # 1) Use DATABASE_URL if provided (Production)

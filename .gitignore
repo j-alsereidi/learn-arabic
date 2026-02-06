@@ -8,6 +8,7 @@ __pycache__/
 
 # Database and config files
 instance/
+app_package/.env
 
 # twilio info
 twilio.txt

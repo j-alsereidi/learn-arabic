@@ -5,7 +5,10 @@ from deep_translator import GoogleTranslator
 from tashaphyne.stemming import ArabicLightStemmer
 import nltk
 from nltk.stem.isri import ISRIStemmer
-from .llm_wrapper import generate_constrained_sentence
+from .communications import openai_response, gemini_response
+from dotenv import load_dotenv
+from typing import Dict
+import os
 import string
 
 main = Blueprint('main', __name__)
@@ -13,6 +16,8 @@ main = Blueprint('main', __name__)
 # --- INITIALIZATION ---
 tashaphyne_stemmer = ArabicLightStemmer()
 isri_stemmer = ISRIStemmer()
+load_dotenv()
+
 try:
     nltk.data.find('tokenizers/punkt_tab')
 except LookupError:
@@ -81,6 +86,13 @@ def update_sentence_completeness(sentence):
         sentence.complete = is_complete
         return True
     return False
+
+def get_environment_variables() -> Dict[str, str]:
+    """
+    Returns relevant environment variables for debugging and frontend display.
+    """
+    env_vars = dict(os.environ)
+    return env_vars
 
 # --- API ENDPOINTS ---
 
@@ -543,14 +555,14 @@ def toggle_known(word_id):
 # =========================
 # Constrained LLM PoC
 # =========================
-@main.route('/api/llm/constrained', methods=['POST'])
-def api_llm_constrained():
+@main.route('/api/llm/openai', methods=['POST'])
+def api_llm_openai():
     """
-    Option C PoC endpoint:
+    Generates a sentence using ChatGPT with constraints on allowed words.
     Input:
       {
-        "allowed_words": ["انا","طالب","في","جامعة"],
-        "new_word": "خليفة"
+        "known_words": ["انا","طالب","في","جامعة"],
+        "max_allowed_words_used": 8
       }
     Output:
       {
@@ -562,14 +574,44 @@ def api_llm_constrained():
     """
     data = request.get_json(silent=True) or {}
 
-    allowed_words = data.get('allowed_words', [])
-    new_word = data.get('new_word', None)
-
-    result = generate_constrained_sentence(
-        allowed_words=allowed_words,
-        new_word=new_word,
-        max_allowed_words_used=8,
+    known_words = data.get('known_words', [])
+    result = openai_response(
+        known_words=known_words,
+        #max_allowed_words_used=8,
     )
 
     # PoC: always return 200 (even if violations exist) so frontend can display errors nicely
     return jsonify(result), 200
+
+@main.route('/api/llm/gemini', methods=['POST'])
+def api_llm_gemini():
+    """
+    Generates a sentence using Gemini with constraints on allowed words.
+    Input:
+      {
+        "known_words": ["انا","طالب","في","جامعة"],
+        "max_allowed_words_used": 8
+      }
+    Output:
+      {
+        "text": "...",
+        "tokens": [...],
+        "used_new_word": true/false,
+        "violations": [...]
+      }
+    """
+    data = request.get_json(silent=True) or {}
+
+    known_words = data.get('known_words', [])
+    result = gemini_response(
+        known_words=known_words,
+        #max_allowed_words_used=8,
+    )
+
+    # PoC: always return 200 (even if violations exist) so frontend can display errors nicely
+    return jsonify(result), 200
+
+@main.route('/env-vars', methods=['GET'])
+def env_vars_endpoint():
+    env_vars = get_environment_variables()
+    return jsonify(env_vars)
