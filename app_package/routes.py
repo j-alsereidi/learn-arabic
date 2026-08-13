@@ -540,7 +540,7 @@ def twilio_webhook():
         db.session.rollback()
         return Response("<Response><Message>Error</Message></Response>", mimetype='text/xml')
 
-@main.route('/api/word/<int:word_id>/toggle_known', methods=['POST'])
+@main.route('/api/toggle-known/<int:word_id>', methods=['POST'])
 def toggle_known(word_id):
     try:
         word = Word.query.get_or_404(word_id)
