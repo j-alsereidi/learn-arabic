@@ -1,67 +1,113 @@
+import os
+import secrets
+
+from pathlib import Path
+
 from flask import Flask
 from flask_cors import CORS
-import os
+from dotenv import load_dotenv
 
-# Import db from extensions
 from .extensions import db
 
 
 def create_app():
+    load_dotenv(
+        Path(__file__).with_name(".env"),
+        override=False,
+    )
+
     app = Flask(__name__)
 
-    # Enable CORS (adjust origins if you want stricter rules)
-    # CORS(app, resources={r"/*": {"origins": ["http://localhost:3000"]}})
-    CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins for now (adjust in production)
+    os.makedirs(app.instance_path, exist_ok=True)
 
-    # Database Configuration
-    # 1) Use DATABASE_URL if provided (Production)
-    # 2) Otherwise use local SQLite (Development)
-    database_url = os.environ.get("DATABASE_URL")
+    frontend_origin = os.getenv(
+        "FRONTEND_ORIGIN",
+        "http://localhost:3000",
+    ).rstrip("/")
+
+    app.config["FRONTEND_ORIGIN"] = frontend_origin
+
+    CORS(
+        app,
+        resources={
+            r"/*": {
+                "origins": [frontend_origin],
+            }
+        },
+        supports_credentials=True,
+    )
+
+    database_url = os.getenv("DATABASE_URL")
 
     if database_url:
-        # Fix for some PaaS that use postgres:// instead of postgresql://
         if database_url.startswith("postgres://"):
-            database_url = database_url.replace("postgres://", "postgresql://", 1)
+            database_url = database_url.replace(
+                "postgres://",
+                "postgresql://",
+                1,
+            )
 
         app.config["SQLALCHEMY_DATABASE_URI"] = database_url
-
-        # Print masked URL for debugging without leaking password
-        masked_url = database_url.split("@")[-1] if "@" in database_url else "PRODUCTION_DB"
-        print(f"Using Production Database: ...@{masked_url}")
     else:
-        # Local SQLite
-        os.makedirs(app.instance_path, exist_ok=True)
-        db_path = os.path.join(app.instance_path, "demo.db")
-        app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
-        print(f"Using Local Database: {db_path}")
+        database_path = os.path.join(
+            app.instance_path,
+            "demo.db",
+        )
+
+        app.config["SQLALCHEMY_DATABASE_URI"] = (
+            f"sqlite:///{database_path}"
+        )
 
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev_key_for_now")
 
-    # Initialize extensions
+    secret = os.getenv("SECRET_KEY")
+
+    if not secret or secret == "dev_key_for_now":
+        if database_url:
+            raise RuntimeError(
+                "Set a strong SECRET_KEY in your server environment."
+            )
+
+        secret_file = Path(app.instance_path) / "auth-secret.key"
+
+        try:
+            descriptor = os.open(
+                secret_file,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+
+            with os.fdopen(descriptor, "w") as file:
+                file.write(secrets.token_hex(32))
+
+        except FileExistsError:
+            pass
+
+        secret = secret_file.read_text().strip()
+
+    app.config["SECRET_KEY"] = secret
+
     db.init_app(app)
 
-    # Import models after db is initialized
-    from . import models  # noqa: F401
-
-    # Import and Register Blueprints
+    from . import models
+    from .auth import install_auth
     from .routes import main
+
     app.register_blueprint(main)
+    install_auth(app)
 
-    # Initialize Database logic
     with app.app_context():
-        try:
-            db.create_all()
+        db.create_all()
 
-            # Seed if local OR explicitly requested
-            should_seed = (not database_url) or (os.environ.get("SEED_DB") == "true")
+        should_seed = (
+            not database_url
+            or os.getenv("SEED_DB") == "true"
+        )
 
-            if should_seed:
-                from .database import seed_database
-                from . import sets
-                seed_database([sets.demo])
+        if should_seed:
+            from .database import seed_database
+            from . import sets
 
-        except Exception as e:
-            print(f"Database initialization skipped or failed: {e}")
+            seed_database([sets.demo])
 
     return app

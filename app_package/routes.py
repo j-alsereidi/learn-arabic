@@ -1,617 +1,745 @@
-from flask import Blueprint, jsonify, request, Response
-from .models import Sentence, Word, Root, WordInstance
-from .extensions import db
-from deep_translator import GoogleTranslator
-from tashaphyne.stemming import ArabicLightStemmer
-import nltk
-from nltk.stem.isri import ISRIStemmer
-from .communications import openai_response, gemini_response
-from dotenv import load_dotenv
-from typing import Dict
+from functools import wraps
+from html import escape
 import os
-import string
+import unicodedata
 
+from flask import Blueprint, Response, current_app, jsonify, request
+from dotenv import load_dotenv
+
+from .extensions import db
+from .models import Sentence, Word, Root, WordInstance, Flashcard
+
+
+load_dotenv()
 main = Blueprint('main', __name__)
 
-# --- INITIALIZATION ---
-tashaphyne_stemmer = ArabicLightStemmer()
-isri_stemmer = ISRIStemmer()
-load_dotenv()
 
-try:
-    nltk.data.find('tokenizers/punkt_tab')
-except LookupError:
-    nltk.download('punkt_tab')
+def text(value):
+    if value is None:
+        return ''
+    if not isinstance(value, str):
+        raise ValueError('Text fields must contain text.')
+    if len(value) > 10000:
+        raise ValueError('Please use at most 10,000 characters.')
+    return unicodedata.normalize('NFC', value).strip()
 
-# --- HELPER FUNCTIONS ---
 
-def clean_punctuation(text):
-    """Strips Arabic and English punctuation for cleaner matching."""
-    punctuation = string.punctuation + '،؛؟”'
-    translator = str.maketrans('', '', punctuation)
-    return text.translate(translator).strip()
+def clean_punctuation(value):
+    value = text(value)
+
+    while value and unicodedata.category(value[0])[0] in 'PS':
+        value = value[1:]
+
+    while value and unicodedata.category(value[-1])[0] in 'PS':
+        value = value[:-1]
+
+    return value
+
+
+def normalized(value):
+    # Preserve hamza letters. Ignore vocalization only for matching.
+    return ''.join(
+        character
+        for character in text(value)
+        if character != 'ـ'
+        and unicodedata.category(character) != 'Mn'
+    )
+
+
+def tokens(value):
+    return text(value).split()
+
+
+def match_word(value, words):
+    value = clean_punctuation(value)
+
+    exact = [
+        word for word in words
+        if text(word.plaintext) == value
+    ]
+
+    candidates = exact or [
+        word for word in words
+        if normalized(word.plaintext) == normalized(value)
+    ]
+
+    # Do not guess between ambiguous words.
+    return candidates[0] if len(candidates) == 1 else None
+
 
 def calculate_completeness(sentence):
-    """
-    Determines if a sentence is complete based on database state.
-    Complete =
-    1. Sentence has a translation (and is not empty).
-    2. All words are resolved (linked via WordInstance OR exact match OR unique fuzzy match).
-    """
-    # 1. Check if Sentence has translation
-    if not sentence.translation or not sentence.translation.strip():
-        return False
-    if not sentence.plaintext:
+    if not text(sentence.translation):
         return False
 
-    tokens = sentence.plaintext.split()
-
-    # Get explicit instances for this sentence
-    instances = {i.index: i.word_id for i in WordInstance.query.filter_by(sentence_id=sentence.sentence_id).all()}
-
-    for idx, raw_token in enumerate(tokens):
-        # 2. Check Explicit Link (WordInstance)
-        if idx in instances:
-            continue
-
-        # 3. Clean punctuation
-        token = clean_punctuation(raw_token)
-        if not token:
-            continue  # Ignore pure punctuation
-
-        # 4. Check Exact Match
-        exact_matches = Word.query.filter_by(plaintext=token).first()
-        if exact_matches:
-            continue
-
-        # 5. Check Pruned/Fuzzy Match (for Ambiguity)
-        tashaphyne_stemmer.light_stem(token)
-        pruned_token = tashaphyne_stemmer.get_unvocalized()
-
-        fuzzy_matches = Word.query.filter_by(prune=pruned_token).all()
-
-        if len(fuzzy_matches) == 1:
-            # Single fuzzy match -> Valid
-            continue
-
-        # If no match or ambiguous (multiple matches), it's incomplete
+    if not tokens(sentence.plaintext):
         return False
+
+    words = Word.query.all()
+    by_id = {word.word_id: word for word in words}
+
+    links = {
+        instance.index: instance.word_id
+        for instance in WordInstance.query.filter_by(
+            sentence_id=sentence.sentence_id
+        )
+    }
+
+    for index, raw in enumerate(tokens(sentence.plaintext)):
+        if not clean_punctuation(raw):
+            continue
+
+        word = (
+            by_id.get(links.get(index))
+            or match_word(raw, words)
+        )
+
+        if word is None:
+            return False
 
     return True
 
+
 def update_sentence_completeness(sentence):
-    """Helper to calculate and save completeness."""
-    is_complete = calculate_completeness(sentence)
-    if sentence.complete != is_complete:
-        sentence.complete = is_complete
-        return True
-    return False
+    previous = sentence.complete
+    sentence.complete = calculate_completeness(sentence)
+    return previous != sentence.complete
 
-def get_environment_variables() -> Dict[str, str]:
-    """
-    Returns relevant environment variables for debugging and frontend display.
-    """
-    env_vars = dict(os.environ)
-    return env_vars
 
-# --- API ENDPOINTS ---
+def refresh_completeness():
+    db.session.flush()
+
+    for sentence in Sentence.query.all():
+        update_sentence_completeness(sentence)
+
+
+def payload():
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        raise ValueError('Send a JSON object.')
+
+    return data
+
+
+def required(value, label='Arabic text'):
+    value = text(value)
+
+    if not value:
+        raise ValueError(f'{label} is required.')
+
+    return value
+
+
+def find(model, identifier):
+    row = db.session.get(model, identifier)
+
+    if row is None:
+        raise ValueError(
+            'Record no longer exists. Refresh the database.'
+        )
+
+    return row
+
+
+def guarded(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+
+        except ValueError as error:
+            db.session.rollback()
+
+            return jsonify(
+                success=False,
+                error=str(error)
+            ), 400
+
+        except Exception:
+            db.session.rollback()
+
+            current_app.logger.exception(
+                'Database operation failed: %s',
+                function.__name__
+            )
+
+            return jsonify(
+                success=False,
+                error=(
+                    'Database operation failed. The Flask terminal '
+                    'contains the exact error. Your draft has not '
+                    'been cleared.'
+                )
+            ), 500
+
+    return wrapped
+
+
+def root_for(data):
+    value = text(data.get('root_plaintext'))
+
+    if not value:
+        return None
+
+    root = Root.query.filter_by(plaintext=value).first()
+
+    if root is None:
+        root = Root(
+            plaintext=value,
+            translation=text(data.get('root_translation'))
+        )
+
+        db.session.add(root)
+        db.session.flush()
+
+    # Existing shared roots are edited through the Roots tab.
+    return root.root_id
+
 
 @main.route('/')
 def home():
-    return jsonify({"status": "API is running. Frontend is hosted separately."})
+    return jsonify(
+        status='API is running',
+        database_version=2
+    )
+
 
 @main.route('/get-data')
+@guarded
 def get_data():
     row = Sentence.query.first()
-    return jsonify({'message': row.plaintext if row else "No data found"})
+
+    return jsonify(
+        message=row.plaintext if row else 'No data found'
+    )
+
 
 @main.route('/api/sentences')
+@guarded
 def api_sentences():
-    sentences = Sentence.query.all()
-    return jsonify([{
-        'sentence_id': s.sentence_id,
-        'plaintext': s.plaintext,
-        'translation': s.translation,
-        'complete': s.complete,
-        'length': s.length
-    } for s in sentences])
+    return jsonify([
+        {
+            'sentence_id': sentence.sentence_id,
+            'plaintext': sentence.plaintext,
+            'translation': sentence.translation or '',
+            'complete': sentence.complete,
+            'length': len(tokens(sentence.plaintext))
+        }
+        for sentence in Sentence.query.all()
+    ])
+
 
 @main.route('/api/words')
+@guarded
 def api_words():
-    words = Word.query.all()
-    return jsonify([{
-        'word_id': w.word_id,
-        'plaintext': w.plaintext,
-        'translation': w.translation,
-        'frequency': w.frequency,
-        'known': w.known,
-        'root_id': w.root_id,
-        'prune': w.prune
-    } for w in words])
+    return jsonify([
+        {
+            'word_id': word.word_id,
+            'plaintext': word.plaintext,
+            'translation': word.translation or '',
+            'root_id': word.root_id,
+            'frequency': word.frequency or 0,
+            'known': bool(word.known),
+            'prune': normalized(word.plaintext)
+        }
+        for word in Word.query.all()
+    ])
+
 
 @main.route('/api/roots')
+@guarded
 def api_roots():
-    roots = Root.query.all()
-    return jsonify([{
-        'root_id': r.root_id,
-        'plaintext': r.plaintext,
-        'translation': r.translation
-    } for r in roots])
+    return jsonify([
+        {
+            'root_id': root.root_id,
+            'plaintext': root.plaintext,
+            'translation': root.translation or ''
+        }
+        for root in Root.query.all()
+    ])
+
 
 @main.route('/api/word-instances')
+@guarded
 def api_word_instances():
-    instances = WordInstance.query.all()
-    return jsonify([{
-        'sentence_id': i.sentence_id,
-        'word_id': i.word_id,
-        'index': i.index
-    } for i in instances])
+    return jsonify([
+        {
+            'sentence_id': instance.sentence_id,
+            'word_id': instance.word_id,
+            'index': instance.index
+        }
+        for instance in WordInstance.query.all()
+    ])
 
-@main.route('/api/link-word', methods=['POST'])
-def link_word_instance():
-    data = request.get_json()
-    sentence_id = data.get('sentence_id')
-    word_id = data.get('word_id')
-    index = data.get('index')
 
-    if sentence_id is None or word_id is None or index is None:
-        return jsonify({'error': 'Missing data'}), 400
+def save_sentence(sentence, data):
+    arabic = required(
+        data.get('plaintext', sentence.plaintext)
+    )
 
-    try:
-        instance = WordInstance.query.filter_by(sentence_id=sentence_id, index=index).first()
-        if instance:
-            instance.word_id = word_id
-        else:
-            instance = WordInstance(sentence_id=sentence_id, word_id=word_id, index=index)
-            db.session.add(instance)
+    # Changing any text invalidates old positional links.
+    if sentence.sentence_id and sentence.plaintext != arabic:
+        WordInstance.query.filter_by(
+            sentence_id=sentence.sentence_id
+        ).delete(synchronize_session=False)
 
-        sentence = Sentence.query.get(sentence_id)
-        if sentence:
-            update_sentence_completeness(sentence)
+    sentence.plaintext = arabic
+    sentence.translation = text(
+        data.get('translation', sentence.translation)
+    )
+    sentence.length = len(tokens(arabic))
 
-        db.session.commit()
-        return jsonify({'success': True})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+    db.session.add(sentence)
+    db.session.flush()
 
-@main.route('/api/unlink-word', methods=['POST'])
-def unlink_word_instance():
-    data = request.get_json()
-    sentence_id = data.get('sentence_id')
-    index = data.get('index')
+    update_sentence_completeness(sentence)
 
-    try:
-        instance = WordInstance.query.filter_by(sentence_id=sentence_id, index=index).first()
-        if instance:
-            db.session.delete(instance)
-            sentence = Sentence.query.get(sentence_id)
-            if sentence:
-                update_sentence_completeness(sentence)
-            db.session.commit()
-        return jsonify({'success': True})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+    for card in Flashcard.query.filter_by(
+        sentence_id=sentence.sentence_id
+    ):
+        card.plaintext = arabic
+        card.translation = sentence.translation
 
-@main.route('/translate', methods=['POST'])
-def translate_text():
-    data = request.get_json()
-    text = data.get('q')
-    source_lang = data.get('source', 'ar')
-    target_lang = data.get('target', 'en')
+    db.session.commit()
 
-    if not text:
-        return jsonify({'error': 'No text provided'}), 400
+    return jsonify(
+        success=True,
+        sentence_id=sentence.sentence_id,
+        complete=sentence.complete
+    )
 
-    try:
-        translator = GoogleTranslator(source=source_lang, target=target_lang)
-        translated_text = translator.translate(text)
-        return jsonify({'translatedText': translated_text})
-    except Exception as e:
-        print(f"Translation Error: {e}")
-        return jsonify({'error': 'Translation failed', 'details': str(e)}), 500
-
-@main.route('/suggest-words', methods=['POST'])
-def suggest_words():
-    data = request.get_json()
-    words_input = data.get('words', [])
-    suggestions = []
-    translator = GoogleTranslator(source='ar', target='en')
-
-    for raw_word_text in words_input:
-        word_text = clean_punctuation(raw_word_text)
-        if not word_text:
-            continue
-
-        try:
-            tashaphyne_stemmer.light_stem(word_text)
-            root_text = tashaphyne_stemmer.get_root()
-            word_translation = translator.translate(word_text)
-            root_translation = translator.translate(root_text) if root_text else ""
-
-            suggestions.append({
-                'plaintext': word_text,
-                'translation': word_translation,
-                'root_plaintext': root_text,
-                'root_translation': root_translation
-            })
-        except Exception:
-            suggestions.append({
-                'plaintext': word_text,
-                'translation': "Error",
-                'root_plaintext': "Error",
-                'root_translation': "Error"
-            })
-
-    return jsonify(suggestions)
-
-@main.route('/suggest-words-isri', methods=['POST'])
-def suggest_words_isri():
-    data = request.get_json()
-    words_input = data.get('words', [])
-    suggestions = []
-    translator = GoogleTranslator(source='ar', target='en')
-
-    for raw_word_text in words_input:
-        word_text = clean_punctuation(raw_word_text)
-        if not word_text:
-            continue
-
-        try:
-            root_text = isri_stemmer.stem(word_text)
-            word_translation = translator.translate(word_text)
-            root_translation = translator.translate(root_text) if root_text else ""
-
-            suggestions.append({
-                'plaintext': word_text,
-                'translation': word_translation,
-                'root_plaintext': root_text,
-                'root_translation': root_translation
-            })
-        except Exception:
-            suggestions.append({
-                'plaintext': word_text,
-                'translation': "Error",
-                'root_plaintext': "Error",
-                'root_translation': "Error"
-            })
-
-    return jsonify(suggestions)
-
-@main.route('/add-words', methods=['POST'])
-def add_words():
-    data = request.get_json()
-    confirmed_items = data.get('items', [])
-    new_roots_count = 0
-    new_words_count = 0
-    added_plaintexts = []
-
-    try:
-        for item in confirmed_items:
-            word_text = clean_punctuation(item.get('plaintext', ''))
-            word_trans = item.get('translation')
-            root_text = item.get('root_plaintext')
-            root_trans = item.get('root_translation')
-
-            if not word_text or not root_text:
-                continue
-
-            existing_root = Root.query.filter_by(plaintext=root_text).first()
-            if existing_root:
-                root_id = existing_root.root_id
-            else:
-                new_root = Root(plaintext=root_text, translation=root_trans)
-                db.session.add(new_root)
-                db.session.flush()
-                root_id = new_root.root_id
-                new_roots_count += 1
-
-            tashaphyne_stemmer.light_stem(word_text)
-            prune_text = tashaphyne_stemmer.get_unvocalized()
-
-            new_word = Word(
-                root_id=root_id,
-                plaintext=word_text,
-                translation=word_trans,
-                prune=prune_text,
-                frequency=50,
-                known=False
-            )
-            db.session.add(new_word)
-            new_words_count += 1
-            added_plaintexts.append(word_text)
-
-        db.session.commit()
-
-        incomplete_sentences = Sentence.query.filter_by(complete=False).all()
-        for sent in incomplete_sentences:
-            for w in added_plaintexts:
-                if w in sent.plaintext:
-                    update_sentence_completeness(sent)
-                    break
-
-        db.session.commit()
-        return jsonify({'success': True, 'new_roots_count': new_roots_count, 'new_words_count': new_words_count})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-@main.route('/api/update-root/<int:root_id>', methods=['PUT'])
-def update_root(root_id):
-    data = request.get_json()
-    try:
-        root = Root.query.get(root_id)
-        if not root:
-            return jsonify({'error': 'Root not found'}), 404
-
-        root.plaintext = data.get('plaintext', root.plaintext)
-        root.translation = data.get('translation', root.translation)
-
-        db.session.commit()
-        return jsonify({'success': True})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-@main.route('/api/update-word/<int:word_id>', methods=['PUT'])
-def update_word(word_id):
-    data = request.get_json()
-    try:
-        word = Word.query.get(word_id)
-        if not word:
-            return jsonify({'error': 'Word not found'}), 404
-
-        old_root_id = word.root_id
-        old_plaintext = word.plaintext
-
-        new_plaintext = clean_punctuation(data.get('plaintext', ''))
-        new_translation = data.get('translation')
-        new_root_text = data.get('root_plaintext')
-        new_root_trans = data.get('root_translation')
-
-        word.plaintext = new_plaintext
-        word.translation = new_translation
-
-        tashaphyne_stemmer.light_stem(new_plaintext)
-        word.prune = tashaphyne_stemmer.get_unvocalized()
-
-        existing_root = Root.query.filter_by(plaintext=new_root_text).first()
-        new_root_created = False
-        deleted_root = False
-
-        if existing_root:
-            if new_root_trans:
-                existing_root.translation = new_root_trans
-            word.root_id = existing_root.root_id
-        else:
-            new_root = Root(plaintext=new_root_text, translation=new_root_trans)
-            db.session.add(new_root)
-            db.session.flush()
-            word.root_id = new_root.root_id
-            new_root_created = True
-
-        db.session.flush()
-
-        if old_root_id != word.root_id:
-            remaining = Word.query.filter_by(root_id=old_root_id).count()
-            if remaining == 0:
-                old_root = Root.query.get(old_root_id)
-                if old_root:
-                    db.session.delete(old_root)
-                    deleted_root = True
-
-        sents_old = Sentence.query.filter(Sentence.plaintext.like(f'%{old_plaintext}%')).all()
-        for s in sents_old:
-            update_sentence_completeness(s)
-
-        if new_plaintext != old_plaintext:
-            sents_new = Sentence.query.filter(Sentence.plaintext.like(f'%{new_plaintext}%')).all()
-            for s in sents_new:
-                update_sentence_completeness(s)
-
-        linked = WordInstance.query.filter_by(word_id=word_id).all()
-        for inst in linked:
-            s = Sentence.query.get(inst.sentence_id)
-            if s:
-                update_sentence_completeness(s)
-
-        db.session.commit()
-        return jsonify({'success': True, 'new_root_created': new_root_created, 'deleted_root': deleted_root})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-@main.route('/api/delete-sentence/<int:sentence_id>', methods=['DELETE'])
-def delete_sentence(sentence_id):
-    try:
-        sentence = Sentence.query.get(sentence_id)
-        if not sentence:
-            return jsonify({'error': 'Sentence not found'}), 404
-
-        WordInstance.query.filter_by(sentence_id=sentence_id).delete()
-        db.session.delete(sentence)
-        db.session.commit()
-        return jsonify({'success': True})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-@main.route('/api/delete-word/<int:word_id>', methods=['DELETE'])
-def delete_word(word_id):
-    try:
-        word = Word.query.get(word_id)
-        if not word:
-            return jsonify({'error': 'Word not found'}), 404
-
-        root_id = word.root_id
-        word_plain = word.plaintext
-        linked_ids = [i.sentence_id for i in WordInstance.query.filter_by(word_id=word_id).all()]
-
-        db.session.delete(word)
-        db.session.flush()
-
-        deleted_root = False
-        if Word.query.filter_by(root_id=root_id).count() == 0:
-            root = Root.query.get(root_id)
-            if root:
-                db.session.delete(root)
-                deleted_root = True
-
-        for sid in linked_ids:
-            s = Sentence.query.get(sid)
-            if s:
-                update_sentence_completeness(s)
-
-        text_matches = Sentence.query.filter(Sentence.plaintext.like(f'%{word_plain}%')).all()
-        for s in text_matches:
-            update_sentence_completeness(s)
-
-        db.session.commit()
-        return jsonify({'success': True, 'deleted_root': deleted_root})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-@main.route('/api/update-sentence/<int:sentence_id>', methods=['PUT'])
-def update_sentence(sentence_id):
-    data = request.get_json()
-    try:
-        sentence = Sentence.query.get(sentence_id)
-        if not sentence:
-            return jsonify({'error': 'Sentence not found'}), 404
-
-        old_length = sentence.length
-        sentence.plaintext = data.get('plaintext', sentence.plaintext)
-        sentence.translation = data.get('translation', sentence.translation)
-        sentence.length = len(sentence.plaintext.split())
-
-        if old_length != sentence.length:
-            WordInstance.query.filter_by(sentence_id=sentence_id).delete()
-
-        update_sentence_completeness(sentence)
-        db.session.commit()
-        return jsonify({'success': True})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
 
 @main.route('/api/create-sentence', methods=['POST'])
+@guarded
 def create_sentence():
-    data = request.get_json()
-    try:
-        new_sentence = Sentence(
-            plaintext=data.get('plaintext'),
-            translation=data.get('translation'),
-            complete=False,
-            length=len(data.get('plaintext', '').split())
+    data = payload()
+    arabic = required(data.get('plaintext'))
+    translation = text(data.get('translation'))
+
+    existing = Sentence.query.filter_by(
+        plaintext=arabic,
+        translation=translation
+    ).first()
+
+    if existing:
+        return jsonify(
+            success=True,
+            sentence_id=existing.sentence_id,
+            existing=True
         )
-        db.session.add(new_sentence)
+
+    return save_sentence(Sentence(), data)
+
+
+@main.route(
+    '/api/update-sentence/<int:sentence_id>',
+    methods=['PUT']
+)
+@guarded
+def update_sentence(sentence_id):
+    return save_sentence(
+        find(Sentence, sentence_id),
+        payload()
+    )
+
+
+@main.route(
+    '/api/delete-sentence/<int:sentence_id>',
+    methods=['DELETE']
+)
+@guarded
+def delete_sentence(sentence_id):
+    sentence = find(Sentence, sentence_id)
+
+    Flashcard.query.filter_by(
+        sentence_id=sentence_id
+    ).delete(synchronize_session=False)
+
+    WordInstance.query.filter_by(
+        sentence_id=sentence_id
+    ).delete(synchronize_session=False)
+
+    db.session.delete(sentence)
+    db.session.commit()
+
+    return jsonify(success=True)
+
+
+@main.route('/add-words', methods=['POST'])
+@guarded
+def add_words():
+    items = payload().get('items')
+
+    if not isinstance(items, list) or not 1 <= len(items) <= 100:
+        raise ValueError('Send between 1 and 100 words.')
+
+    count = 0
+    roots_before = Root.query.count()
+
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError('Each word must be an object.')
+
+        arabic = required(
+            clean_punctuation(item.get('plaintext'))
+        )
+        translation = text(item.get('translation'))
+        root_id = root_for(item)
+
+        exists = Word.query.filter_by(
+            plaintext=arabic,
+            translation=translation,
+            root_id=root_id
+        ).first()
+
+        if exists:
+            continue
+
+        db.session.add(Word(
+            plaintext=arabic,
+            translation=translation,
+            root_id=root_id,
+            prune=normalized(arabic),
+            frequency=0,
+            known=False
+        ))
+
         db.session.flush()
-        update_sentence_completeness(new_sentence)
-        db.session.commit()
-        return jsonify({'success': True, 'sentence_id': new_sentence.sentence_id})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
+        count += 1
+
+    refresh_completeness()
+
+    roots_added = Root.query.count() - roots_before
+
+    db.session.commit()
+
+    return jsonify(
+        success=True,
+        new_words_count=count,
+        new_roots_count=roots_added
+    )
+
+
+@main.route(
+    '/api/update-word/<int:word_id>',
+    methods=['PUT']
+)
+@guarded
+def update_word(word_id):
+    word = find(Word, word_id)
+    data = payload()
+
+    arabic = required(
+        clean_punctuation(
+            data.get('plaintext', word.plaintext)
+        )
+    )
+
+    if arabic != word.plaintext:
+        WordInstance.query.filter_by(
+            word_id=word_id
+        ).delete(synchronize_session=False)
+
+    word.plaintext = arabic
+    word.translation = text(
+        data.get('translation', word.translation)
+    )
+    word.prune = normalized(arabic)
+
+    if 'root_plaintext' in data:
+        word.root_id = root_for(data)
+
+    refresh_completeness()
+    db.session.commit()
+
+    return jsonify(success=True)
+
+
+@main.route(
+    '/api/delete-word/<int:word_id>',
+    methods=['DELETE']
+)
+@guarded
+def delete_word(word_id):
+    word = find(Word, word_id)
+
+    # Remove foreign-key references before deleting the word.
+    WordInstance.query.filter_by(
+        word_id=word_id
+    ).delete(synchronize_session=False)
+
+    db.session.delete(word)
+
+    refresh_completeness()
+    db.session.commit()
+
+    return jsonify(
+        success=True,
+        deleted_root=False
+    )
+
+
+@main.route(
+    '/api/update-root/<int:root_id>',
+    methods=['PUT']
+)
+@guarded
+def update_root(root_id):
+    root = find(Root, root_id)
+    data = payload()
+
+    root.plaintext = required(
+        data.get('plaintext', root.plaintext),
+        'Root'
+    )
+
+    root.translation = text(
+        data.get('translation', root.translation)
+    )
+
+    db.session.commit()
+
+    return jsonify(success=True)
+
+
+@main.route('/api/link-word', methods=['POST'])
+@guarded
+def link_word_instance():
+    data = payload()
+
+    sentence = find(Sentence, data.get('sentence_id'))
+    word = find(Word, data.get('word_id'))
+    index = data.get('index')
+
+    if (
+        type(index) is not int
+        or not 0 <= index < len(tokens(sentence.plaintext))
+    ):
+        raise ValueError('Invalid word position.')
+
+    instance = WordInstance.query.filter_by(
+        sentence_id=sentence.sentence_id,
+        index=index
+    ).first()
+
+    if instance is None:
+        instance = WordInstance(
+            sentence_id=sentence.sentence_id,
+            index=index
+        )
+        db.session.add(instance)
+
+    instance.word_id = word.word_id
+
+    db.session.flush()
+    update_sentence_completeness(sentence)
+    db.session.commit()
+
+    return jsonify(success=True)
+
+
+@main.route('/api/unlink-word', methods=['POST'])
+@guarded
+def unlink_word_instance():
+    data = payload()
+
+    sentence = find(Sentence, data.get('sentence_id'))
+    index = data.get('index')
+
+    if type(index) is not int or index < 0:
+        raise ValueError('Invalid word position.')
+
+    WordInstance.query.filter_by(
+        sentence_id=sentence.sentence_id,
+        index=index
+    ).delete(synchronize_session=False)
+
+    db.session.flush()
+    update_sentence_completeness(sentence)
+    db.session.commit()
+
+    return jsonify(success=True)
+
+
+@main.route('/translate', methods=['POST'])
+@guarded
+def translate_text():
+    data = payload()
+    value = required(data.get('q'))
+
+    if len(value) > 4500:
+        raise ValueError(
+            'Translate at most 4,500 characters at a time.'
+        )
+
+    if (
+        data.get('source', 'ar') != 'ar'
+        or data.get('target', 'en') != 'en'
+    ):
+        raise ValueError(
+            'This translator supports Arabic to English.'
+        )
+
+    # Use an exact saved translation if one exists.
+    for model in (Sentence, Word):
+        matches = {
+            row.translation.strip()
+            for row in model.query.filter_by(plaintext=value)
+            if row.translation and row.translation.strip()
+        }
+
+        if len(matches) == 1:
+            return jsonify(
+                translatedText=matches.pop(),
+                source='saved database translation'
+            )
+
+    try:
+        from deep_translator import GoogleTranslator
+
+        translated = GoogleTranslator(
+            source='ar',
+            target='en'
+        ).translate(value)
+
+        if (
+            not isinstance(translated, str)
+            or not translated.strip()
+        ):
+            raise RuntimeError('Empty translation')
+
+        return jsonify(
+            translatedText=translated.strip(),
+            source='automatic translation; review before saving'
+        )
+
+    except Exception as error:
+        current_app.logger.exception(
+            'External translation failed'
+        )
+
+        return jsonify(
+            error=(
+                'Automatic translation is unavailable. '
+                'You can still save this text without a translation, '
+                'or enter one yourself.'
+            ),
+            code='TRANSLATION_UNAVAILABLE',
+            reason=type(error).__name__
+        ), 503
+
+
+@main.route('/suggest-words', methods=['POST'])
+@main.route('/suggest-words-isri', methods=['POST'])
+@guarded
+def suggest_words():
+    values = payload().get('words')
+
+    if not isinstance(values, list) or len(values) > 100:
+        raise ValueError('Send a list of up to 100 words.')
+
+    words = Word.query.all()
+    result = []
+
+    for raw in values:
+        value = clean_punctuation(raw)
+
+        if not value:
+            continue
+
+        word = match_word(value, words)
+
+        root = (
+            db.session.get(Root, word.root_id)
+            if word and word.root_id
+            else None
+        )
+
+        result.append({
+            'plaintext': value,
+            'translation': word.translation if word else '',
+            'root_plaintext': root.plaintext if root else '',
+            'root_translation': root.translation if root else '',
+            'source': 'database' if word else 'needs review'
+        })
+
+    return jsonify(result)
+
+
+@main.route(
+    '/api/toggle-known/<int:word_id>',
+    methods=['POST']
+)
+@guarded
+def toggle_known(word_id):
+    word = find(Word, word_id)
+    word.known = not word.known
+
+    db.session.commit()
+
+    return jsonify(
+        success=True,
+        new_known=word.known
+    )
+
 
 @main.route('/api/twilio/webhook', methods=['POST'])
+@guarded
 def twilio_webhook():
-    try:
-        message_body = request.form.get('Body')
-        if not message_body:
-            return Response("<Response><Message>Error</Message></Response>", mimetype='text/xml')
+    value = required(request.form.get('Body'))
 
-        new_sentence = Sentence(
-            plaintext=message_body,
-            translation="",
-            complete=False,
-            length=len(message_body.split())
-        )
-        db.session.add(new_sentence)
-        db.session.flush()
-        update_sentence_completeness(new_sentence)
-        db.session.commit()
-        return Response(
-            f"<Response><Message>Saved sentence ✅ \"{message_body}\"</Message></Response>",
-            mimetype='text/xml'
-        )
-    except Exception:
-        db.session.rollback()
-        return Response("<Response><Message>Error</Message></Response>", mimetype='text/xml')
-
-@main.route('/api/toggle-known/<int:word_id>', methods=['POST'])
-def toggle_known(word_id):
-    try:
-        word = Word.query.get_or_404(word_id)
-        word.known = not word.known
-        db.session.commit()
-        return jsonify({'success': True, 'new_known': word.known})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-
-# =========================
-# Constrained LLM PoC
-# =========================
-@main.route('/api/llm/openai', methods=['POST'])
-def api_llm_openai():
-    """
-    Generates a sentence using ChatGPT with constraints on allowed words.
-    Input:
-      {
-        "known_words": ["انا","طالب","في","جامعة"],
-        "max_allowed_words_used": 8
-      }
-    Output:
-      {
-        "text": "...",
-        "tokens": [...],
-        "used_new_word": true/false,
-        "violations": [...]
-      }
-    """
-    data = request.get_json(silent=True) or {}
-
-    known_words = data.get('known_words', [])
-    result = openai_response(
-        known_words=known_words,
-        #max_allowed_words_used=8,
+    sentence = Sentence(
+        plaintext=value,
+        translation='',
+        length=len(tokens(value)),
+        complete=False
     )
 
-    # PoC: always return 200 (even if violations exist) so frontend can display errors nicely
-    return jsonify(result), 200
+    db.session.add(sentence)
+    db.session.commit()
+
+    return Response(
+        f'<Response><Message>Saved: {escape(value)}</Message></Response>',
+        mimetype='text/xml'
+    )
+
+
+@main.route('/api/llm/openai', methods=['POST'])
+@guarded
+def api_llm_openai():
+    from .communications import openai_response
+
+    return jsonify(
+        openai_response(
+            known_words=payload().get('known_words', [])
+        )
+    )
+
 
 @main.route('/api/llm/gemini', methods=['POST'])
+@guarded
 def api_llm_gemini():
-    """
-    Generates a sentence using Gemini with constraints on allowed words.
-    Input:
-      {
-        "known_words": ["انا","طالب","في","جامعة"],
-        "max_allowed_words_used": 8
-      }
-    Output:
-      {
-        "text": "...",
-        "tokens": [...],
-        "used_new_word": true/false,
-        "violations": [...]
-      }
-    """
-    data = request.get_json(silent=True) or {}
+    from .communications import gemini_response
 
-    known_words = data.get('known_words', [])
-    result = gemini_response(
-        known_words=known_words,
-        #max_allowed_words_used=8,
+    return jsonify(
+        gemini_response(
+            known_words=payload().get('known_words', [])
+        )
     )
 
-    # PoC: always return 200 (even if violations exist) so frontend can display errors nicely
-    return jsonify(result), 200
 
-@main.route('/env-vars', methods=['GET'])
+@main.route('/env-vars')
 def env_vars_endpoint():
-    env_vars = get_environment_variables()
-    return jsonify(env_vars)
+    return jsonify(
+        OPENAI_API_KEY_CONFIGURED=bool(
+            os.getenv('OPENAI_API_KEY')
+        ),
+        GEMINI_API_KEY_CONFIGURED=bool(
+            os.getenv('GEMINI_API_KEY')
+        )
+    )
+
+
+from .tutor_routes import register_tutor_routes
+
+register_tutor_routes(main, calculate_completeness)

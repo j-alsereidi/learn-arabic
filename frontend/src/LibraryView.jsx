@@ -1,1222 +1,1349 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-  BookOpen, 
-  Type, 
-  Database, 
-  Trash2,
-  Save,
-  Languages, 
-  Edit3,
-  CheckCircle2,
-  XCircle,
-  AlertCircle,
-  Loader,
-  ArrowDown,
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+
+import {
+  Search,
+  Bookmark,
+  BookOpen,
+  Play,
   Check,
   X,
-  CopyPlus,
-  HelpCircle,
-  Link as LinkIcon
+  ArrowLeft,
+  ArrowRight,
+  Plus,
+  Loader,
+  CheckCircle2,
+  Layers,
+  Volume2
 } from 'lucide-react';
 
+import {
+  LIBRARY_TOPICS,
+  allTopicSentences
+} from './libraryData';
+
 const API_BASE = process.env.REACT_APP_API_URL || '';
+const STORAGE_KEY = 'learn-arabic.library.v2';
 
-// --- Helpers ---
+const CATEGORIES = [
+  'All',
+  'Dialogues',
+  'Vocabulary',
+  'Grammar',
+  'Culture',
+  'Daily Life',
+  'Travel',
+  'Food'
+];
 
-const stripDiacritics = (text) => {
-    if (!text) return "";
-    return text
-        .normalize('NFD')
-        .replace(/[\u064B-\u065F\u0640\u0670]/g, '')
-        .replace(/[؟،!.,;:]/g, ''); 
+const LEGACY = {
+  greetings: ['السلام عليكم', 'كيف حالك؟', 'اسمي مريم'],
+  home: ['هذا بيتي', 'الباب مفتوح', 'الكتاب على الطاولة'],
+  food: [
+    'أريد كوب ماء',
+    'أحب القهوة العربية',
+    'الحساب من فضلك'
+  ],
+  airport: [
+    'أين بوابة المغادرة؟',
+    'متى تقلع الطائرة؟',
+    'هذا جواز سفري'
+  ],
+  city: ['أين المكتبة؟', 'المسجد قريب', 'المدينة جميلة'],
+  shopping: [
+    'كم سعر هذا الكتاب؟',
+    'هل لديكم مقاس أكبر؟',
+    'أريد شراء هذه الحقيبة'
+  ],
+  culture: [
+    'تشتهر الإمارات بكرم الضيافة',
+    'تقدم القهوة العربية للضيوف',
+    'يحافظ الناس على تراثهم الثقافي'
+  ],
+  grammar: [
+    'أنا طالب',
+    'البيت كبير',
+    'اللغة العربية جميلة'
+  ]
 };
 
-// --- Components ---
+const keyOf = (lesson, index) => `${lesson.id}:${index}`;
 
-const FrequencyBar = ({ value }) => {
-  const bars = 5;
-  const filledBars = Math.ceil((value / 100) * bars);
-  return (
-    <div className="flex gap-1 items-center" title={`Frequency: ${value}`}>
-      {[...Array(bars)].map((_, i) => (
-        <div key={i} className={`h-4 w-1.5 rounded-sm transition-all ${i < filledBars ? 'bg-indigo-400' : 'bg-slate-700/50'}`} />
-      ))}
-    </div>
+const cardKey = item =>
+  JSON.stringify([
+    item.arabic.trim(),
+    item.translation.trim()
+  ]);
+
+const countStudied = (lesson, state) =>
+  lesson.sentences.filter(
+    (_, index) => state.studied[keyOf(lesson, index)]
+  ).length;
+
+const topicCount = (topic, state) =>
+  topic.lessons.reduce(
+    (sum, lesson) => sum + countStudied(lesson, state),
+    0
   );
+
+const percent = (done, total) =>
+  total ? Math.round((done / total) * 100) : 0;
+
+const readState = () => {
+  const empty = {
+    bookmarks: [],
+    studied: {}
+  };
+
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+
+    if (saved) {
+      const value = JSON.parse(saved);
+
+      return {
+        bookmarks: Array.isArray(value?.bookmarks)
+          ? value.bookmarks
+          : [],
+        studied:
+          value?.studied &&
+          typeof value.studied === 'object' &&
+          !Array.isArray(value.studied)
+            ? value.studied
+            : {}
+      };
+    }
+
+    const old = JSON.parse(
+      localStorage.getItem('learn-arabic.library.v1') ||
+        '{}'
+    );
+
+    const studied = {};
+
+    LIBRARY_TOPICS.forEach(topic => {
+      topic.lessons.forEach(lesson => {
+        lesson.sentences.forEach((item, index) => {
+          const oldIndex = (
+            LEGACY[topic.id] || []
+          ).indexOf(item.arabic);
+
+          if (
+            oldIndex >= 0 &&
+            old?.studied?.[`${topic.id}:${oldIndex}`]
+          ) {
+            studied[keyOf(lesson, index)] = true;
+          }
+        });
+      });
+    });
+
+    return {
+      bookmarks: Array.isArray(old?.bookmarks)
+        ? old.bookmarks
+        : [],
+      studied
+    };
+  } catch {
+    return empty;
+  }
 };
 
-const Tooltip = ({ children, content }) => {
-  const [isVisible, setIsVisible] = useState(false);
-  return (
-    <div className="relative inline-block" onMouseEnter={() => setIsVisible(true)} onMouseLeave={() => setIsVisible(false)}>
-      {children}
-      {isVisible && (
-        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg shadow-xl border border-slate-700 whitespace-nowrap z-50 animate-in fade-in zoom-in duration-200 pointer-events-none">
-          {content}
-          <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-const TableRow = ({ data, columns, onClick, isActive, className = "" }) => (
-  <tr 
-    onClick={onClick}
+const Level = ({ value }) => (
+  <span
     className={`
-      border-b border-slate-800/50 cursor-pointer transition-colors duration-200
-      ${isActive ? 'bg-indigo-500/10 hover:bg-indigo-500/20' : 'hover:bg-slate-800/50'}
-      ${className}
+      inline-flex rounded-md border px-2 py-1
+      text-[10px] font-medium
+      ${
+        value === 'Beginner'
+          ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+          : value === 'Intermediate'
+            ? 'border-sky-500/20 bg-sky-500/10 text-sky-300'
+            : 'border-violet-500/20 bg-violet-500/10 text-violet-300'
+      }
     `}
   >
-    {columns.map((col, idx) => (
-      <td key={idx} className={`p-4 text-sm ${col.align === 'right' ? 'text-right' : 'text-left'} ${col.isArabic ? 'font-arabic text-lg' : 'text-slate-300'}`}>
-        {col.render ? col.render(data) : data[col.key]}
-      </td>
-    ))}
-  </tr>
+    {value}
+  </span>
 );
 
-// --- MAIN LIBRARY COMPONENT (Refactored logic from previous App) ---
-const LibraryView = () => {
-  // Data State
-  const [sentences, setSentences] = useState([]);
-  const [words, setWords] = useState([]);
-  const [roots, setRoots] = useState([]);
-  const [wordInstances, setWordInstances] = useState([]);
-  
-  // UI State
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [activeTab, setActiveTab] = useState('sentences');
-  const [selectedSentenceId, setSelectedSentenceId] = useState(null);
-  const [highlightedWordId, setHighlightedWordId] = useState(null);
-  const [translationInput, setTranslationInput] = useState("");
-  const [isTranslating, setIsTranslating] = useState(false);
-  
-  const [isEditingSentence, setIsEditingSentence] = useState(false);
-  const [editingSentenceText, setEditingSentenceText] = useState("");
+const Progress = ({ done, total }) => (
+  <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
+    <div
+      className="h-full rounded-full bg-indigo-500 transition-all"
+      style={{
+        width: `${percent(done, total)}%`
+      }}
+    />
+  </div>
+);
 
-  const [isStaging, setIsStaging] = useState(false);
-  const [isProcessingWords, setIsProcessingWords] = useState(false);
-  const [stagedWords, setStagedWords] = useState([]);
-  const [newRootsCount, setNewRootsCount] = useState(0); 
-  const [deletedRootsCount, setDeletedRootsCount] = useState(0); 
-
-  const [isEditingWord, setIsEditingWord] = useState(false);
-  const [editingWordId, setEditingWordId] = useState(null); 
-  const [editingWord, setEditingWord] = useState("");
-  const [editingRoot, setEditingRoot] = useState("");
-  const [editingWordTrans, setEditingWordTrans] = useState("");
-  const [editingRootTrans, setEditingRootTrans] = useState("");
-  const [isTranslatingWord, setIsTranslatingWord] = useState(false);
-
-  const [deleteConfirmSentence, setDeleteConfirmSentence] = useState(false);
-  const [deleteConfirmWord, setDeleteConfirmWord] = useState(false);
-  const [ambiguityModal, setAmbiguityModal] = useState(null);
-
-  const wordRefs = useRef({});
-  const rootRefs = useRef({});
-  
-  const fetchData = useCallback(async () => {
-    try {
-      setLoading(true);
-      const [sentencesRes, wordsRes, rootsRes, instanceRes] = await Promise.all([
-        fetch(`${API_BASE}/api/sentences`),
-        fetch(`${API_BASE}/api/words`),
-        fetch(`${API_BASE}/api/roots`),
-        fetch(`${API_BASE}/api/word-instances`)
-      ]);
-      const [sData, wData, rData, iData] = await Promise.all([
-        sentencesRes.json(), wordsRes.json(), rootsRes.json(), instanceRes.json()
-      ]);
-      setSentences(sData);
-      setWords(wData);
-      setRoots(rData);
-      setWordInstances(iData);
-      
-      if (sData.length > 0) {
-        // Logic handled in effect
-      } 
-    } catch (err) {
-      console.error("Error fetching data:", err);
-      setError("Failed to load data.");
-    } finally {
-      setLoading(false);
-    }
-  }, []); 
+const Cover = ({ topic, large = false }) => {
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    setFailed(false);
+  }, [topic.image]);
 
-  useEffect(() => {
-      if (!loading && sentences.length > 0) {
-          if (!selectedSentenceId || !sentences.find(s => s.sentence_id === selectedSentenceId)) {
-              setSelectedSentenceId(sentences[0].sentence_id);
-          }
-      }
-  }, [loading, sentences, selectedSentenceId]);
+  return (
+    <div
+      className={`
+        relative overflow-hidden bg-gradient-to-br
+        ${topic.accent}
+        ${large ? 'h-44' : 'h-36'}
+      `}
+    >
+      {!failed && (
+        <img
+          src={topic.image}
+          alt={topic.title}
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      )}
 
-  const selectedSentence = sentences.find(s => s.sentence_id === selectedSentenceId);
-  
-  const sentenceTokens = selectedSentence 
-    ? selectedSentence.plaintext.split(' ').map((token, index) => {
-        const explicitLink = wordInstances.find(
-            i => i.sentence_id === selectedSentenceId && i.index === index
-        );
-        if (explicitLink) {
-            const linkedWord = words.find(w => w.word_id === explicitLink.word_id);
-            if (linkedWord) {
-                return {
-                    text: token,
-                    status: 'linked',
-                    wordData: linkedWord,
-                    rootData: roots.find(r => r.root_id === linkedWord.root_id),
-                    index
-                };
-            }
-        }
-
-        const cleanToken = token.replace(/[؟،!.,;:]/g, ''); 
-        const exactMatch = words.find(w => w.plaintext === cleanToken || w.plaintext === token);
-        if (exactMatch) {
-            return {
-                text: token,
-                status: 'exact',
-                wordData: exactMatch,
-                rootData: roots.find(r => r.root_id === exactMatch.root_id),
-                index
-            };
-        }
-
-        const prunedToken = stripDiacritics(cleanToken);
-        const fuzzyMatches = words.filter(w => w.prune === prunedToken);
-
-        if (fuzzyMatches.length === 1) {
-            const match = fuzzyMatches[0];
-            return {
-                text: token,
-                status: 'inferred',
-                wordData: match,
-                rootData: roots.find(r => r.root_id === match.root_id),
-                index
-            };
-        } else if (fuzzyMatches.length > 1) {
-            return {
-                text: token,
-                status: 'ambiguous',
-                candidates: fuzzyMatches, 
-                index
-            };
-        }
-
-        return {
-            text: token,
-            cleanText: cleanToken,
-            status: 'missing',
-            wordData: null,
-            rootData: null,
-            index
-        };
-      })
-    : [];
-
-  const missingWords = sentenceTokens.filter(t => t.status === 'missing').map(t => t.cleanText || t.text);
-  const hasMissingWords = missingWords.length > 0;
-
-  useEffect(() => {
-    if (selectedSentence) {
-        setTranslationInput(selectedSentence.translation);
-        if (isEditingSentence) {
-             setEditingSentenceText(selectedSentence.plaintext);
-        }
-        setDeleteConfirmSentence(false); 
-    }
-  }, [selectedSentenceId, selectedSentence, isEditingSentence]); 
-
-  useEffect(() => {
-    if (newRootsCount > 0) {
-      const timer = setTimeout(() => setNewRootsCount(0), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [newRootsCount]);
-
-  useEffect(() => {
-    if (deletedRootsCount > 0) {
-      const timer = setTimeout(() => setDeletedRootsCount(0), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [deletedRootsCount]);
-
-  const handleWordClick = async (token) => {
-    const {wordData, text, status, candidates, index} = token;
-
-    if (status === 'ambiguous') {
-        setAmbiguityModal({ tokenIndex: index, candidates, tokenText: text });
-        return;
-    }
-
-    if (wordData) {
-      setActiveTab('words');
-      setHighlightedWordId(wordData.word_id);
-      setTimeout(() => {
-        wordRefs.current[wordData.word_id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }, 100);
-    } else {
-      setIsEditingWord(true);
-      setEditingWordId(null);
-      setDeleteConfirmWord(false); 
-      setEditingWord(stripDiacritics(text));
-      setEditingRoot("");
-      setEditingWordTrans("");
-      setEditingRootTrans("");
-
-      setIsTranslatingWord(true);
-      try {
-        const response = await fetch(`${API_BASE}/suggest-words`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ words: [text] })
-        });
-        const suggestions = await response.json();
-        if (suggestions && suggestions.length > 0) {
-            const suggestion = suggestions[0];
-            if (suggestion.plaintext !== "Error") {
-                setEditingWord(suggestion.plaintext); 
-                setEditingWordTrans(suggestion.translation);
-                setEditingRoot(suggestion.root_plaintext);
-                setEditingRootTrans(suggestion.root_translation);
-            }
-        }
-      } catch (err) {
-        console.error("Error fetching suggestions:", err);
-      } finally {
-        setIsTranslatingWord(false);
-      }
-    }
-  };
-
-  const handleTableWordClick = (word) => {
-    const root = roots.find(r => r.root_id === word.root_id);
-    setIsEditingWord(true);
-    setEditingWordId(word.word_id);
-    setEditingWord(word.plaintext);
-    setEditingRoot(root ? root.plaintext : "");
-    setEditingWordTrans(word.translation);
-    setEditingRootTrans(root ? root.translation : "");
-    setDeleteConfirmWord(false); 
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const handleSentenceSelect = (s) => {
-    setIsEditingSentence(false);
-    setSelectedSentenceId(s.sentence_id);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const handleTranslateSentence = async () => {
-    const textToTranslate = isEditingSentence ? editingSentenceText : selectedSentence?.plaintext;
-    if (!textToTranslate) return;
-
-    setIsTranslating(true);
-    try {
-      const response = await fetch(`${API_BASE}/translate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: textToTranslate }),
-      });
-      const data = await response.json();
-      if (data.translatedText) setTranslationInput(data.translatedText);
-    } catch (error) {
-      console.error("Translation error:", error);
-    } finally {
-      setIsTranslating(false);
-    }
-  };
-
-  const handleTranslateWordEditor = async () => {
-    setIsTranslatingWord(true);
-    try {
-      const wRes = await fetch(`${API_BASE}/translate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q: editingWord }),
-      });
-      const wData = await wRes.json();
-      if (wData.translatedText) setEditingWordTrans(wData.translatedText);
-
-      if (editingRoot) {
-        const rRes = await fetch(`${API_BASE}/translate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ q: editingRoot }),
-        });
-        const rData = await rRes.json();
-        if (rData.translatedText) setEditingRootTrans(rData.translatedText);
-      }
-    } catch (error) {
-      console.error("Translation error:", error);
-    } finally {
-      setIsTranslatingWord(false);
-    }
-  };
-
-  const handleConfirmWordEditor = async () => {
-    if (!editingWord || !editingRoot) {
-      alert("Please enter both Word and Root.");
-      return;
-    }
-
-    setIsProcessingWords(true);
-    try {
-      let response;
-      if (editingWordId) {
-        response = await fetch(`${API_BASE}/api/update-word/${editingWordId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                plaintext: editingWord,
-                translation: editingWordTrans,
-                root_plaintext: editingRoot,
-                root_translation: editingRootTrans
-            })
-        });
-      } else {
-        const payload = {
-            items: [{
-            plaintext: editingWord,
-            translation: editingWordTrans,
-            root_plaintext: editingRoot,
-            root_translation: editingRootTrans
-            }]
-        };
-        response = await fetch(`${API_BASE}/add-words`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-      }
-      if (!response.ok) throw new Error("Server error");
-      const result = await response.json();
-      if (result.success) {
-        if (result.new_roots_count > 0 || result.new_root_created) setNewRootsCount(prev => prev + 1);
-        if (result.deleted_root) setDeletedRootsCount(prev => prev + 1);
-        await fetchData();
-        setIsEditingWord(false);
-      }
-    } catch (err) {
-      console.error("Error saving word:", err);
-      alert("Error saving word.");
-    } finally {
-      setIsProcessingWords(false);
-    }
-  };
-
-  const handleAddWordsClick = async () => {
-    if (missingWords.length === 0) return;
-    setIsProcessingWords(true);
-    try {
-      const response = await fetch(`${API_BASE}/suggest-words-isri`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ words: missingWords })
-      });
-      const suggestions = await response.json();
-      setStagedWords(suggestions.map(s => ({ ...s, checked: true })));
-      setIsStaging(true);
-    } catch (err) {
-      console.error("Error getting suggestions:", err);
-      alert("Failed to get word suggestions.");
-    } finally {
-      setIsProcessingWords(false);
-    }
-  };
-
-  const handleToggleStagedWord = (index) => {
-    const updated = [...stagedWords];
-    updated[index].checked = !updated[index].checked;
-    setStagedWords(updated);
-  };
-
-  const handleConfirmAddWords = async () => {
-    const wordsToAdd = stagedWords.filter(w => w.checked);
-    if (wordsToAdd.length === 0) {
-      setIsStaging(false);
-      return;
-    }
-    setIsProcessingWords(true);
-    try {
-      const response = await fetch(`${API_BASE}/add-words`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: wordsToAdd })
-      });
-      if (!response.ok) throw new Error("Server error");
-      const result = await response.json();
-      if (result.success) {
-        if (result.new_roots_count > 0) setNewRootsCount(result.new_roots_count);
-        await fetchData();
-        setIsStaging(false);
-        setStagedWords([]);
-      }
-    } catch (err) {
-      console.error("Error confirming words:", err);
-      alert("Error saving words.");
-    } finally {
-      setIsProcessingWords(false);
-    }
-  };
-
-	const handleSelectAmbiguousCandidate = async (word) => {
-			if (!ambiguityModal) return;
-			
-			try {
-					const response = await fetch(`${API_BASE}/api/link-word`, {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify({
-									sentence_id: selectedSentenceId,
-									index: ambiguityModal.tokenIndex,
-									word_id: word.word_id
-							})
-					});
-					
-					if (response.ok) {
-							setAmbiguityModal(null);
-							await fetchData(); // Refresh to see the new 'linked' status
-					} else {
-							alert("Failed to save selection.");
-					}
-			} catch (err) {
-					console.error(err);
-					alert("Error saving selection.");
-			}
-	};
-
-  // --- DELETE HANDLERS ---
-
-  const handleDeleteSentenceClick = () => {
-    if (deleteConfirmSentence) handleDeleteSentence();
-    else setDeleteConfirmSentence(true);
-  };
-
-  const handleDeleteSentence = async () => {
-    if (!selectedSentenceId) return;
-    try {
-        const response = await fetch(`${API_BASE}/api/delete-sentence/${selectedSentenceId}`, { method: 'DELETE' });
-        if (response.ok) {
-            await fetchData();
-            setDeleteConfirmSentence(false); 
-        } else {
-            alert("Failed to delete sentence.");
-            setDeleteConfirmSentence(false);
-        }
-    } catch (err) {
-        console.error(err);
-        alert("Error deleting sentence");
-        setDeleteConfirmSentence(false);
-    }
-  };
-
-  const handleDeleteWordClick = () => {
-    if (deleteConfirmWord) handleDeleteWord();
-    else setDeleteConfirmWord(true);
-  };
-
-  const handleDeleteWord = async () => {
-    if (!editingWordId) return; 
-    try {
-        const response = await fetch(`${API_BASE}/api/delete-word/${editingWordId}`, { method: 'DELETE' });
-        const result = await response.json();
-        if (result.success) {
-            if (result.deleted_root) setDeletedRootsCount(prev => prev + 1);
-            await fetchData();
-            setIsEditingWord(false);
-            setDeleteConfirmWord(false);
-        } else {
-            alert("Failed to delete word: " + result.error);
-            setDeleteConfirmWord(false);
-        }
-    } catch (err) {
-        console.error(err);
-        alert("Error deleting word");
-        setDeleteConfirmWord(false);
-    }
-  };
-
-  // --- SENTENCE EDIT HANDLERS ---
-
-  const handleEditSentenceClick = () => {
-    setIsEditingSentence(true);
-    setEditingSentenceText(selectedSentence.plaintext);
-  };
-
-  const handleUpdateSentence = async () => {
-    const textToSend = isEditingSentence ? editingSentenceText : selectedSentence.plaintext;
-    try {
-        const response = await fetch(`${API_BASE}/api/update-sentence/${selectedSentenceId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                plaintext: textToSend,
-                translation: translationInput
-            })
-        });
-        if (response.ok) {
-            setIsEditingSentence(false);
-            await fetchData();
-        } else {
-            alert("Failed to update sentence.");
-        }
-    } catch (err) {
-        console.error(err);
-        alert("Error updating sentence");
-    }
-  };
-
-  const handleCreateSentence = async () => {
-    try {
-        const response = await fetch(`${API_BASE}/api/create-sentence`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                plaintext: editingSentenceText,
-                translation: translationInput
-            })
-        });
-        const result = await response.json();
-        if (result.success) {
-            setIsEditingSentence(false);
-            await fetchData();
-            setSelectedSentenceId(result.sentence_id);
-        } else {
-            alert("Failed to create sentence.");
-        }
-    } catch (err) {
-        console.error(err);
-        alert("Error creating sentence");
-    }
-  };
-
-  // --- Render (Component Scoped) ---
-  
-  // Ambiguity Modal
-  const AmbiguityModal = () => {
-    if (!ambiguityModal) return null;
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">
-                <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
-                    <div>
-                        <h3 className="text-lg font-medium text-indigo-400">Multiple Matches Found</h3>
-                        <p className="text-slate-400 text-sm mt-1">
-                            The word <span className="text-white font-arabic mx-1">"{ambiguityModal.tokenText}"</span> matches multiple entries.
-                        </p>
-                    </div>
-                    <button onClick={() => setAmbiguityModal(null)} className="text-slate-500 hover:text-white">
-                        <X className="w-5 h-5" />
-                    </button>
-                </div>
-                <div className="p-4 bg-slate-900 max-h-[60vh] overflow-y-auto">
-                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Select the correct meaning:</p>
-                    <div className="space-y-2">
-                        {ambiguityModal.candidates.map(candidate => (
-                            <button
-                                key={candidate.word_id}
-                                onClick={() => handleSelectAmbiguousCandidate(candidate)}
-                                className="w-full flex items-center justify-between p-4 rounded-lg bg-slate-800 hover:bg-indigo-600/20 border border-slate-700 hover:border-indigo-500 transition-all group text-left"
-                            >
-                                <div>
-                                    <div className="text-xl font-arabic text-white mb-1">{candidate.plaintext}</div>
-                                    <div className="text-sm text-slate-400 group-hover:text-indigo-200">{candidate.translation}</div>
-                                </div>
-                                <div className="text-right">
-                                    <div className="text-xs text-slate-500 mb-1">Root</div>
-                                    <div className="text-sm font-arabic text-indigo-400">R-{candidate.root_id}</div>
-                                </div>
-                            </button>
-                        ))}
-                    </div>
-                    <div className="mt-4 pt-4 border-t border-slate-800">
-                         <button 
-                            onClick={() => {
-                                setAmbiguityModal(null);
-                                setIsEditingWord(true);
-                                setEditingWord(ambiguityModal.tokenText);
-                                setEditingWordId(null);
-                            }}
-                            className="w-full py-3 px-4 rounded-lg border border-dashed border-slate-600 text-slate-400 hover:text-white hover:bg-slate-800 hover:border-slate-500 transition-all text-sm font-medium flex items-center justify-center gap-2"
-                        >
-                            <CopyPlus className="w-4 h-4" />
-                            None of these? Create new word
-                        </button>
-                    </div>
-                </div>
-            </div>
+      {failed && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <BookOpen className="h-12 w-12 text-white/60" />
         </div>
+      )}
+
+      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-transparent to-transparent" />
+
+      <span className="absolute bottom-3 left-4 text-[10px] uppercase tracking-widest text-white/90">
+        {topic.category}
+      </span>
+    </div>
+  );
+};
+
+const LibraryView = () => {
+  const [state, setState] = useState(readState);
+
+  const [query, setQuery] = useState('');
+  const [category, setCategory] = useState('All');
+  const [level, setLevel] = useState('All levels');
+  const [onlySaved, setOnlySaved] = useState(false);
+
+  const [selectedId, setSelectedId] = useState(
+    LIBRARY_TOPICS[0].id
+  );
+
+  const [panel, setPanel] = useState('lessons');
+  const [active, setActive] = useState(null);
+  const [index, setIndex] = useState(0);
+  const [revealed, setRevealed] = useState(false);
+  const [finished, setFinished] = useState(false);
+
+  const [savedCards, setSavedCards] = useState({});
+  const [saving, setSaving] = useState(null);
+  const saveLock = useRef(false);
+
+  const [error, setError] = useState('');
+  const [storageError, setStorageError] = useState('');
+  const [audioError, setAudioError] = useState('');
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(state)
+      );
+
+      setStorageError('');
+    } catch {
+      setStorageError(
+        'Your browser could not save your progress. Keep this page open.'
+      );
+    }
+  }, [state]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch(`${API_BASE}/api/tutor/flashcards`)
+      .then(response =>
+        response.ok ? response.json() : []
+      )
+      .then(cards => {
+        if (!cancelled && Array.isArray(cards)) {
+          const known = {};
+
+          cards.forEach(card => {
+            if (
+              typeof card.plaintext === 'string' &&
+              typeof card.translation === 'string'
+            ) {
+              known[
+                cardKey({
+                  arabic: card.plaintext,
+                  translation: card.translation
+                })
+              ] = true;
+            }
+          });
+
+          setSavedCards(previous => ({
+            ...previous,
+            ...known
+          }));
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.getVoices();
+    }
+
+    return () => {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  const filtered = useMemo(
+    () =>
+      LIBRARY_TOPICS.filter(topic => {
+        const text = `
+          ${topic.title}
+          ${topic.arabic}
+          ${topic.description}
+          ${topic.lessons
+            .map(item => `${item.title} ${item.arabic}`)
+            .join(' ')}
+        `.toLowerCase();
+
+        return (
+          (
+            !query.trim() ||
+            text.includes(query.trim().toLowerCase())
+          ) &&
+          (
+            category === 'All' ||
+            topic.category === category ||
+            topic.tags.includes(category)
+          ) &&
+          (
+            level === 'All levels' ||
+            topic.level === level
+          ) &&
+          (
+            !onlySaved ||
+            state.bookmarks.includes(topic.id)
+          )
+        );
+      }),
+    [
+      query,
+      category,
+      level,
+      onlySaved,
+      state.bookmarks
+    ]
+  );
+
+  const selected =
+    filtered.find(topic => topic.id === selectedId) ||
+    filtered[0];
+
+  const activeTopic = active
+    ? LIBRARY_TOPICS.find(
+        topic => topic.id === active.topicId
+      )
+    : null;
+
+  const activeLesson = activeTopic?.lessons.find(
+    lesson => lesson.id === active.lessonId
+  );
+
+  const totalLessons = LIBRARY_TOPICS.reduce(
+    (sum, topic) => sum + topic.lessons.length,
+    0
+  );
+
+  const completedLessons = LIBRARY_TOPICS.reduce(
+    (sum, topic) =>
+      sum +
+      topic.lessons.filter(
+        lesson =>
+          countStudied(lesson, state) ===
+          lesson.sentences.length
+      ).length,
+    0
+  );
+
+  const totalSentences = LIBRARY_TOPICS.reduce(
+    (sum, topic) =>
+      sum + allTopicSentences(topic).length,
+    0
+  );
+
+  const toggleBookmark = topic => {
+    setState(previous => ({
+      ...previous,
+      bookmarks: previous.bookmarks.includes(topic.id)
+        ? previous.bookmarks.filter(
+            id => id !== topic.id
+          )
+        : [...previous.bookmarks, topic.id]
+    }));
+  };
+
+  const stopAudio = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+  };
+
+  const openLesson = (topic, lesson) => {
+    const first = lesson.sentences.findIndex(
+      (_, itemIndex) =>
+        !state.studied[keyOf(lesson, itemIndex)]
+    );
+
+    stopAudio();
+    setSelectedId(topic.id);
+
+    setActive({
+      topicId: topic.id,
+      lessonId: lesson.id
+    });
+
+    setIndex(first < 0 ? 0 : first);
+    setRevealed(false);
+    setFinished(false);
+    setError('');
+    setAudioError('');
+  };
+
+  const startTopic = topic => {
+    const nextLesson =
+      topic.lessons.find(
+        lesson =>
+          countStudied(lesson, state) <
+          lesson.sentences.length
+      ) || topic.lessons[0];
+
+    openLesson(topic, nextLesson);
+  };
+
+  const closeLesson = () => {
+    stopAudio();
+    setActive(null);
+    setError('');
+    setAudioError('');
+  };
+
+  const move = next => {
+    stopAudio();
+    setIndex(next);
+    setRevealed(false);
+    setAudioError('');
+    setError('');
+  };
+
+  const markStudied = () => {
+    const nextStudied = {
+      ...state.studied,
+      [keyOf(activeLesson, index)]: true
+    };
+
+    setState(previous => ({
+      ...previous,
+      studied: {
+        ...previous.studied,
+        [keyOf(activeLesson, index)]: true
+      }
+    }));
+
+    const allDone = activeLesson.sentences.every(
+      (_, itemIndex) =>
+        nextStudied[keyOf(activeLesson, itemIndex)]
+    );
+
+    if (allDone) {
+      stopAudio();
+      setFinished(true);
+      return;
+    }
+
+    const next = activeLesson.sentences.findIndex(
+      (_, itemIndex) =>
+        itemIndex > index &&
+        !nextStudied[keyOf(activeLesson, itemIndex)]
+    );
+
+    move(
+      next >= 0
+        ? next
+        : activeLesson.sentences.findIndex(
+            (_, itemIndex) =>
+              !nextStudied[keyOf(activeLesson, itemIndex)]
+          )
     );
   };
 
-  // Word Editor
-  const WordEditor = () => (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl relative overflow-hidden group">
-       <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
-       <div className="relative z-10 flex flex-col gap-6">
-          <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-             <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">
-               {editingWordId ? "Editing Existing Word" : "Adding New Word"}
-             </h2>
-             <button onClick={() => setIsEditingWord(false)} className="text-slate-500 hover:text-white transition-colors">
-               <X className="w-5 h-5" />
-             </button>
+  const saveCard = async item => {
+    const key = cardKey(item);
+
+    if (saveLock.current || savedCards[key]) return;
+
+    saveLock.current = true;
+    setSaving(key);
+    setError('');
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/tutor/flashcards`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(item)
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(
+          data.error || 'Could not save the flashcard.'
+        );
+      }
+
+      setSavedCards(previous => ({
+        ...previous,
+        [key]: true
+      }));
+    } catch (err) {
+      setError(
+        err.message ||
+          'Could not save. Check that Flask is running.'
+      );
+    } finally {
+      saveLock.current = false;
+      setSaving(null);
+    }
+  };
+
+  const saveButton = item => (
+    <button
+      onClick={() => saveCard(item)}
+      disabled={
+        Boolean(saving) || savedCards[cardKey(item)]
+      }
+      className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-xs text-indigo-300 hover:bg-indigo-500/10 disabled:opacity-50"
+    >
+      {saving === cardKey(item) ? (
+        <Loader className="h-4 w-4 animate-spin" />
+      ) : savedCards[cardKey(item)] ? (
+        <Check className="h-4 w-4" />
+      ) : (
+        <Plus className="h-4 w-4" />
+      )}
+
+      {saving === cardKey(item)
+        ? 'Saving...'
+        : savedCards[cardKey(item)]
+          ? 'Saved to Flashcards'
+          : 'Save to Flashcards'}
+    </button>
+  );
+
+  const speak = text => {
+    setAudioError('');
+
+    if (
+      !('speechSynthesis' in window) ||
+      !('SpeechSynthesisUtterance' in window)
+    ) {
+      setAudioError(
+        'Audio is not supported in this browser.'
+      );
+      return;
+    }
+
+    const voice = window.speechSynthesis
+      .getVoices()
+      .find(item => /^ar(?:-|_|$)/i.test(item.lang));
+
+    if (!voice) {
+      setAudioError(
+        'No Arabic voice is available. Try again shortly or enable an Arabic voice in your device settings.'
+      );
+      return;
+    }
+
+    stopAudio();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+
+    utterance.voice = voice;
+    utterance.lang = voice.lang;
+    utterance.rate = 0.85;
+
+    utterance.onerror = event => {
+      if (
+        !['canceled', 'interrupted'].includes(event.error)
+      ) {
+        setAudioError(
+          'The Arabic audio could not play on this device.'
+        );
+      }
+    };
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  if (activeLesson) {
+    const item = activeLesson.sentences[index];
+    const done = countStudied(activeLesson, state);
+
+    const nextLesson =
+      activeTopic.lessons[
+        activeTopic.lessons.findIndex(
+          lesson => lesson.id === activeLesson.id
+        ) + 1
+      ];
+
+    return (
+      <div className="mx-auto max-w-5xl space-y-6 pb-8">
+        <button
+          onClick={closeLesson}
+          className="flex items-center gap-2 text-sm text-slate-400 hover:text-white"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Library
+        </button>
+
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs text-indigo-400">
+              {activeTopic.title}
+            </p>
+
+            <h1 className="mt-2 text-2xl font-bold text-white">
+              {activeLesson.title}
+            </h1>
+
+            <p
+              className="mt-2 font-arabic text-lg text-slate-400"
+              dir="rtl"
+            >
+              {activeLesson.arabic}
+            </p>
           </div>
 
-          <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs text-slate-500 font-bold mb-1 block">WORD (ARABIC)</label>
-                <input 
-                  value={editingWord} 
-                  onChange={(e) => setEditingWord(e.target.value)}
-                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-right font-arabic text-xl text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-              <div>
-                <label className="text-xs text-slate-500 font-bold mb-1 block">ROOT (ARABIC)</label>
-                <input 
-                  value={editingRoot} 
-                  onChange={(e) => setEditingRoot(e.target.value)}
-                  placeholder="Enter Root..."
-                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-right font-arabic text-xl text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-700"
-                />
-              </div>
-            </div>
+          <Level value={activeTopic.level} />
+        </header>
 
-            <div className="flex justify-center">
-              <button 
-                onClick={handleTranslateWordEditor}
-                disabled={isTranslatingWord}
-                className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-6 py-2 rounded-full text-sm font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
+        <div className="space-y-2">
+          <div className="flex justify-between text-xs text-slate-500">
+            <span>Lesson progress</span>
+            <span>
+              {done} / {activeLesson.sentences.length} studied
+            </span>
+          </div>
+
+          <Progress
+            done={done}
+            total={activeLesson.sentences.length}
+          />
+        </div>
+
+        {storageError && (
+          <p role="alert" className="text-sm text-amber-300">
+            {storageError}
+          </p>
+        )}
+
+        {finished ? (
+          <div className="rounded-3xl border border-emerald-500/20 bg-slate-900 p-10 text-center space-y-5">
+            <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-400" />
+
+            <h2 className="text-2xl font-semibold text-white">
+              Lesson complete
+            </h2>
+
+            <p className="text-slate-400">
+              You studied all {activeLesson.sentences.length}{' '}
+              sentences in {activeLesson.title}.
+            </p>
+
+            <div className="flex flex-wrap justify-center gap-3">
+              <button
+                onClick={closeLesson}
+                className="rounded-xl border border-slate-700 px-5 py-3 text-sm text-slate-300"
               >
-                {isTranslatingWord ? <Loader className="w-4 h-4 animate-spin" /> : <ArrowDown className="w-4 h-4 group-hover:translate-y-0.5 transition-transform" />}
-                {isTranslatingWord ? "Translating..." : "Translate"}
+                View Lessons
+              </button>
+
+              {nextLesson && (
+                <button
+                  onClick={() =>
+                    openLesson(activeTopic, nextLesson)
+                  }
+                  className="rounded-xl bg-indigo-600 px-5 py-3 text-sm text-white hover:bg-indigo-500"
+                >
+                  Next Lesson
+                </button>
+              )}
+
+              <button
+                onClick={() => {
+                  setFinished(false);
+                  move(0);
+                }}
+                className="px-4 py-3 text-sm text-indigo-300"
+              >
+                Review Again
               </button>
             </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_270px] gap-5 items-start">
+            <div className="space-y-4">
+              <div className="rounded-3xl border border-slate-800 bg-slate-900 p-6 md:p-10 text-center space-y-7">
+                <div className="flex justify-between text-xs text-slate-500">
+                  <span>
+                    Sentence {index + 1} of{' '}
+                    {activeLesson.sentences.length}
+                  </span>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="text-xs text-slate-500 font-bold mb-1 block">TRANSLATION</label>
-                <input 
-                  value={editingWordTrans} 
-                  onChange={(e) => setEditingWordTrans(e.target.value)}
-                  placeholder="Word translation..."
-                  className="w-full bg-slate-950/30 border border-slate-800 text-slate-300 text-lg rounded-lg p-3 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors placeholder:text-slate-600"
-                />
+                  {state.studied[
+                    keyOf(activeLesson, index)
+                  ] && (
+                    <span className="text-emerald-400">
+                      Studied
+                    </span>
+                  )}
+                </div>
+
+                <p
+                  className="font-arabic text-3xl md:text-4xl leading-loose text-white"
+                  dir="rtl"
+                >
+                  {item.arabic}
+                </p>
+
+                <button
+                  onClick={() => speak(item.arabic)}
+                  className="mx-auto flex items-center gap-2 rounded-full bg-indigo-500/10 px-4 py-2 text-xs text-indigo-300"
+                >
+                  <Volume2 className="h-4 w-4" />
+                  Listen
+                </button>
+
+                {revealed ? (
+                  <p className="text-lg text-indigo-100 leading-relaxed">
+                    {item.translation}
+                  </p>
+                ) : (
+                  <button
+                    onClick={() => setRevealed(true)}
+                    className="rounded-xl border border-slate-700 px-5 py-3 text-sm text-slate-300 hover:bg-slate-800"
+                  >
+                    Show Translation
+                  </button>
+                )}
+
+                <div>{saveButton(item)}</div>
               </div>
-              <div>
-                <label className="text-xs text-slate-500 font-bold mb-1 block">ROOT TRANSLATION</label>
-                <input 
-                  value={editingRootTrans} 
-                  onChange={(e) => setEditingRootTrans(e.target.value)}
-                  placeholder="Root translation..."
-                  className="w-full bg-slate-950/30 border border-slate-800 text-slate-300 text-lg rounded-lg p-3 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors placeholder:text-slate-600"
-                />
+
+              {audioError && (
+                <p
+                  role="alert"
+                  className="text-xs text-amber-300"
+                >
+                  {audioError}
+                </p>
+              )}
+
+              {error && (
+                <p role="alert" className="text-sm text-rose-300">
+                  {error}
+                </p>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <button
+                  disabled={index === 0}
+                  onClick={() => move(index - 1)}
+                  className="flex items-center gap-1 text-sm text-slate-400 disabled:opacity-30"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Previous
+                </button>
+
+                <button
+                  onClick={markStudied}
+                  className="flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm text-white hover:bg-indigo-500"
+                >
+                  <Check className="h-4 w-4" />
+                  Studied — Continue
+                </button>
+
+                <button
+                  disabled={
+                    index === activeLesson.sentences.length - 1
+                  }
+                  onClick={() => move(index + 1)}
+                  className="flex items-center gap-1 text-sm text-slate-400 disabled:opacity-30"
+                >
+                  Next
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap justify-center gap-2">
+                {activeLesson.sentences.map(
+                  (_, itemIndex) => (
+                    <button
+                      key={itemIndex}
+                      aria-label={`Go to sentence ${itemIndex + 1}`}
+                      aria-current={
+                        index === itemIndex ? 'step' : undefined
+                      }
+                      onClick={() => move(itemIndex)}
+                      className={`
+                        h-8 w-8 rounded-lg text-xs border
+                        ${
+                          index === itemIndex
+                            ? 'bg-indigo-600 border-indigo-500 text-white'
+                            : state.studied[
+                                  keyOf(activeLesson, itemIndex)
+                                ]
+                              ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+                              : 'border-slate-800 text-slate-500'
+                        }
+                      `}
+                    >
+                      {itemIndex + 1}
+                    </button>
+                  )
+                )}
               </div>
             </div>
-          </div>
 
-          <div className="flex items-center justify-between pt-4 border-t border-slate-800/50 mt-2">
-            {/* Delete Button with Safety Catch */}
-            {editingWordId && (
-              <button 
-                onClick={handleDeleteWordClick}
-                onMouseLeave={() => setDeleteConfirmWord(false)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all border
-                    ${deleteConfirmWord
-                      ? 'bg-rose-600 border-rose-500 text-white hover:bg-rose-500 shadow-lg shadow-rose-500/20'
-                      : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-rose-900/30 hover:text-rose-400'
-                    }
+            <aside className="space-y-4">
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+                <h2 className="text-sm font-semibold text-white mb-3">
+                  Study Note
+                </h2>
+
+                <p className="text-sm text-slate-400 leading-relaxed">
+                  {activeLesson.note}
+                </p>
+              </div>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+                <h2 className="text-sm font-semibold text-white mb-4">
+                  Key Vocabulary
+                </h2>
+
+                <div className="space-y-3">
+                  {activeLesson.vocabulary.map(word => (
+                    <div
+                      key={word.word}
+                      className="border-b border-slate-800 pb-3 last:border-0 last:pb-0"
+                    >
+                      <p
+                        className="font-arabic text-xl text-indigo-200"
+                        dir="rtl"
+                      >
+                        {word.word}
+                      </p>
+
+                      <p className="mt-1 text-xs text-slate-400">
+                        {word.meaning}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </aside>
+          </div>
+        )}
+
+        <p className="text-xs text-slate-500">
+          Your studied progress is saved in this browser.
+          Saved flashcards are stored in your project database.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5 pb-8">
+      <header className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div>
+          <p className="text-[10px] tracking-[0.2em] uppercase text-indigo-400 mb-2">
+            Your learning collection
+          </p>
+
+          <h1 className="text-3xl font-bold text-white">
+            Library
+          </h1>
+
+          <p className="mt-2 text-sm text-slate-400">
+            Explore topics, follow structured lessons,
+            and build your Arabic.
+          </p>
+        </div>
+
+        <div className="relative w-full lg:w-80">
+          <Search className="absolute left-3 top-3.5 h-4 w-4 text-slate-500" />
+
+          <input
+            aria-label="Search topics and lessons"
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="Search topics or lessons..."
+            className="w-full rounded-xl border border-slate-800 bg-slate-900 py-3 pl-10 pr-9 text-sm text-white outline-none focus:border-indigo-500"
+          />
+
+          {query && (
+            <button
+              aria-label="Clear search"
+              onClick={() => setQuery('')}
+              className="absolute right-3 top-3.5 text-slate-400"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </header>
+
+      <div className="flex flex-wrap gap-5 text-xs text-slate-500">
+        <span>{LIBRARY_TOPICS.length} topics</span>
+        <span>{totalLessons} lessons</span>
+        <span>{totalSentences} sentences</span>
+
+        <span className="text-emerald-400">
+          {completedLessons} lessons completed
+        </span>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {CATEGORIES.map(item => (
+          <button
+            key={item}
+            onClick={() => {
+              setCategory(item);
+              setPanel('lessons');
+            }}
+            className={`
+              rounded-lg border px-3 py-2 text-xs font-medium
+              ${
+                category === item
+                  ? 'border-indigo-500 bg-indigo-600 text-white'
+                  : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white'
+              }
+            `}
+          >
+            {item}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex gap-3">
+          <select
+            aria-label="Difficulty level"
+            value={level}
+            onChange={event => setLevel(event.target.value)}
+            className="rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300"
+          >
+            {[
+              'All levels',
+              'Beginner',
+              'Intermediate',
+              'Advanced'
+            ].map(item => (
+              <option key={item}>{item}</option>
+            ))}
+          </select>
+
+          <button
+            aria-pressed={onlySaved}
+            onClick={() => setOnlySaved(value => !value)}
+            className={`
+              flex items-center gap-2 rounded-lg
+              border px-3 py-2 text-xs
+              ${
+                onlySaved
+                  ? 'border-indigo-500 bg-indigo-500/10 text-indigo-300'
+                  : 'border-slate-800 text-slate-400'
+              }
+            `}
+          >
+            <Bookmark className="h-3.5 w-3.5" />
+            Saved Topics
+          </button>
+        </div>
+
+        <span className="text-xs text-slate-500">
+          {filtered.length} topics shown
+        </span>
+      </div>
+
+      {storageError && (
+        <p role="alert" className="text-sm text-amber-300">
+          {storageError}
+        </p>
+      )}
+
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
+        <div className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-3 gap-4">
+          {filtered.map(topic => {
+            const total = allTopicSentences(topic).length;
+            const done = topicCount(topic, state);
+            const bookmarked =
+              state.bookmarks.includes(topic.id);
+
+            return (
+              <article
+                key={topic.id}
+                className={`
+                  relative overflow-hidden rounded-2xl
+                  border bg-slate-900 transition-colors
+                  ${
+                    selected?.id === topic.id
+                      ? 'border-indigo-500 ring-1 ring-indigo-500/20'
+                      : 'border-slate-800 hover:border-slate-600'
+                  }
                 `}
               >
-                <Trash2 className="w-4 h-4" />
-                {deleteConfirmWord ? "Are you sure?" : "Delete"}
-              </button>
-            )}
-
-            <div className="flex gap-2 ml-auto">
-              <button 
-                onClick={() => setIsEditingWord(false)}
-                className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
-              >
-                Cancel
-              </button>
-              <button 
-                onClick={handleConfirmWordEditor}
-                disabled={isProcessingWords}
-                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
-              >
-                {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                {isProcessingWords ? "Saving..." : "Save"}
-              </button>
-            </div>
-          </div>
-       </div>
-    </div>
-  );
-
-  const SentenceEditor = () => {
-    if (loading && sentences.length === 0) {
-       return (
-        <div className="flex flex-col items-center justify-center h-64 text-indigo-400 border-2 border-dashed border-indigo-900 rounded-xl bg-slate-900/30">
-          <Loader className="w-8 h-8 mb-4 animate-spin" />
-          <p className="text-lg">Loading data...</p>
-        </div>
-      );
-    }
-
-    if (error) {
-       return (
-        <div className="flex flex-col items-center justify-center h-64 text-rose-400 border-2 border-dashed border-rose-900 rounded-xl bg-slate-900/30">
-          <AlertCircle className="w-8 h-8 mb-4" />
-          <p className="text-lg font-medium">{error}</p>
-        </div>
-      );
-    }
-
-    if (!selectedSentence && sentences.length > 0) {
-        return (
-            <div className="flex flex-col items-center justify-center h-64 text-slate-500 border-2 border-dashed border-slate-800 rounded-xl bg-slate-900/30">
-              <p className="text-lg">Select a sentence</p>
-            </div>
-        )
-    }
-
-    if (!selectedSentence) return null;
-
-    if (isEditingWord) {
-      return <WordEditor />;
-    }
-
-    return (
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl relative overflow-hidden group">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
-
-        <div className="relative z-10 flex flex-col gap-4">
-          <div className="flex justify-between items-center">
-             <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">
-               {isEditingSentence ? "Editing Sentence Text" : `Editing Sentence #${selectedSentence.sentence_id}`}
-             </h2>
-          </div>
-
-          <div className="bg-slate-950/50 rounded-lg p-8 min-h-[160px] flex items-center justify-center border border-slate-800 shadow-inner" dir="rtl">
-            {isEditingSentence ? (
-                /* EDIT MODE: TEXTAREA */
-                <textarea 
-                    value={editingSentenceText}
-                    onChange={(e) => setEditingSentenceText(e.target.value)}
-                    className="w-full bg-transparent text-4xl leading-relaxed font-arabic text-slate-100 text-center outline-none border-none resize-none focus:ring-0"
-                    placeholder="Type sentence here..."
-                    autoFocus
-                />
-            ) : (
-                /* VIEW MODE: INTERACTIVE TOKENS */
-                <div className="flex flex-wrap gap-3 text-4xl leading-relaxed font-arabic text-slate-100">
-                {sentenceTokens.map((token, idx) => {
-                    const isFound = !!token.wordData;
-										const isAmbiguous = token.status === 'ambiguous';
-										const isLinked = token.status === 'linked';
-
-										return (
-                    <Tooltip 
-                        key={idx} 
-                        content={
-                        <div className="text-center min-w-[80px]">
-														{isAmbiguous ? (
-														<div className="text-amber-400 font-medium flex items-center justify-center gap-1">
-																<HelpCircle className="w-3 h-3" />
-																Ambiguous
-														</div>
-                            ) : isFound ? (
-                            <>
-																<div className="flex items-center justify-center gap-1 text-slate-400 text-[10px] uppercase tracking-wider mb-1">
-                                    {isLinked && <LinkIcon className="w-3 h-3 text-indigo-400" />}
-                                    {token.status === 'inferred' && "Inferred"}
-                                    {token.status === 'exact' && ""} 
-                                </div> {/*Div added for inferred/exact label*/}
-                                <div className="font-bold text-indigo-300 mb-1">{token.rootData?.plaintext || "No Root"}</div>
-                                <div className="text-slate-300">{token.rootData?.translation}</div>
-                            </>
-                            ) : (
-                            <div className="text-rose-400 font-medium flex items-center justify-center gap-1">
-                                <AlertCircle className="w-3 h-3" />
-                                Not found
-                            </div>
-                            )}
-                        </div>
-                        }
-                    >
-                        <span
-                        onClick={() => handleWordClick(token)}
-                        onMouseEnter={() => isFound && token.wordData && setHighlightedWordId(token.wordData.word_id)}
-                        onMouseLeave={() => setHighlightedWordId(null)}
-                        className={
-													`
-                            px-2 py-1 rounded-md transition-all duration-200 relative
-                            ${isFound 
-                            ? `cursor-pointer hover:bg-indigo-500/20 hover:text-indigo-300 hover:scale-105 hover:-translate-y-1 ${highlightedWordId === token.wordData?.word_id ? 'bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/50' : ''}`
-                            : 'cursor-pointer text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-400 decoration-rose-500/30'
-                            }
-                        	`
-													
-												}
-                        >
-                        {token.text}
-                        </span>
-                    </Tooltip>
-                    );
-                })}
-                </div>
-            )}
-          </div>
-          
-          <div className="flex justify-center -my-2 z-20">
-            <button 
-              onClick={handleTranslateSentence}
-              disabled={isTranslating}
-              className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-6 py-2 rounded-full text-sm font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
-            >
-              {isTranslating ? <Loader className="w-4 h-4 animate-spin" /> : <ArrowDown className="w-4 h-4 group-hover:translate-y-0.5 transition-transform" />}
-              {isTranslating ? "Translating..." : "Translate"}
-            </button>
-          </div>
-
-          <div className="w-full">
-            <textarea
-              value={translationInput}
-              onChange={(e) => setTranslationInput(e.target.value)}
-              className="w-full h-[80px] bg-slate-950/30 border border-slate-800 text-slate-300 text-lg rounded-lg p-4 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors resize-none placeholder:text-slate-600"
-              placeholder="Enter translation here..."
-            />
-          </div>
-          
-          <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800/50 mt-2">
-            {isEditingSentence ? (
-                /* EDIT MODE FOOTER */
-                <>
-                    <button 
-                        onClick={() => setIsEditingSentence(false)}
-                        className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
-                    >
-                        Cancel
-                    </button>
-                    <div className="flex gap-2">
-                        <button 
-                            onClick={handleCreateSentence}
-                            className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg shadow-purple-500/20 transition-all active:scale-95"
-                        >
-                            <CopyPlus className="w-4 h-4" />
-                            Save New
-                        </button>
-                        <button 
-                            onClick={handleUpdateSentence}
-                            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg shadow-emerald-500/20 transition-all active:scale-95"
-                        >
-                            <CheckCircle2 className="w-4 h-4" />
-                            Confirm & Save
-                        </button>
-                    </div>
-                </>
-            ) : (
-                /* VIEW MODE FOOTER */
-                <>
-                    {/* Delete Button with Safety Catch */}
-                    <button 
-                        onClick={handleDeleteSentenceClick}
-                        onMouseLeave={() => setDeleteConfirmSentence(false)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all border
-                            ${deleteConfirmSentence
-                                ? 'bg-rose-600 border-rose-500 text-white hover:bg-rose-500 shadow-lg shadow-rose-500/20'
-                                : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-rose-900/30 hover:text-rose-400'
-                            }
-                        `}
-                    >
-                        <Trash2 className="w-4 h-4" />
-                        {deleteConfirmSentence ? "Are you sure?" : "Delete"}
-                    </button>
-
-                    <div className="flex gap-2">
-                        <button 
-                            onClick={handleAddWordsClick}
-                            disabled={!hasMissingWords || isProcessingWords}
-                            className={`
-                            flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border
-                            ${hasMissingWords && !isProcessingWords
-                                ? 'bg-slate-800 hover:bg-slate-700 text-indigo-300 border-slate-700 cursor-pointer shadow-lg shadow-indigo-500/10' 
-                                : 'bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed opacity-50'
-                            }
-                            `}
-                        >
-                            {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <Languages className="w-4 h-4" />}
-                            Add Words
-                        </button>
-
-                        <button 
-                            onClick={handleEditSentenceClick}
-                            className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
-                        >
-                            <Edit3 className="w-4 h-4" />
-                            Edit
-                        </button>
-                        
-                        <button 
-                            onClick={handleUpdateSentence} // SAVE NOW OVERWRITES IN VIEW MODE
-                            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
-                        >
-                            <Save className="w-4 h-4" />
-                            Save
-                        </button>
-                    </div>
-                </>
-            )}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const StagingArea = () => (
-    <div className="flex flex-col h-full bg-slate-900/50">
-      <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900 sticky top-0 z-20">
-        <div>
-          <h3 className="text-lg font-medium text-white">Review New Words</h3>
-          <p className="text-slate-400 text-sm">Uncheck any incorrect suggestions before saving.</p>
-        </div>
-        <div className="flex gap-3">
-          <button 
-            onClick={() => setIsStaging(false)}
-            className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
-          >
-            Cancel
-          </button>
-          <button 
-            onClick={handleConfirmAddWords}
-            disabled={isProcessingWords}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg text-sm font-medium shadow-lg shadow-emerald-500/20 transition-all active:scale-95 disabled:opacity-50"
-          >
-            {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-            Confirm & Save
-          </button>
-        </div>
-      </div>
-      
-      <div className="p-6 overflow-auto custom-scrollbar flex-1">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {stagedWords.map((item, idx) => (
-            <div 
-              key={idx}
-              className={`
-                relative p-4 rounded-xl border transition-all duration-200 cursor-pointer group
-                ${item.checked 
-                  ? 'bg-slate-800 border-indigo-500/50 shadow-lg shadow-indigo-500/10' 
-                  : 'bg-slate-900/50 border-slate-800 opacity-60 hover:opacity-80'
-                }
-              `}
-              onClick={() => handleToggleStagedWord(idx)}
-            >
-              <div className={`
-                absolute top-3 right-3 w-6 h-6 rounded-full flex items-center justify-center transition-colors
-                ${item.checked ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-400'}
-              `}>
-                <Check className="w-4 h-4" />
-              </div>
-
-              <div className="space-y-4 pr-8">
-                <div>
-                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">New Word</div>
-                  <div className="text-2xl font-arabic text-slate-200 mb-1" dir="rtl">{item.plaintext}</div>
-                  <div className="text-sm text-indigo-300 font-medium">{item.translation}</div>
-                </div>
-                
-                <div className="h-px bg-slate-700/50 w-full" />
-
-                <div>
-                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Root</div>
-                  <div className="text-xl font-arabic text-slate-300 mb-1" dir="rtl">{item.root_plaintext}</div>
-                  <div className="text-sm text-slate-400">{item.root_translation}</div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-
-  // Render return for LibraryView
-  return (
-    <div className="space-y-8 animate-in fade-in duration-300">
-      <AmbiguityModal />
-      
-      {/* Editor Section */}
-      <section>
-        <SentenceEditor />
-      </section>
-
-      {/* Tables Section */}
-      <section className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl overflow-hidden flex flex-col h-[600px] relative transition-all">
-        {isStaging ? (
-          <StagingArea />
-        ) : (
-          <>
-            {/* Tabs */}
-            <div className="flex border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm">
-              {[
-                { id: 'sentences', label: 'Sentences', icon: Type },
-                { id: 'words', label: 'Words', icon: BookOpen },
-                { id: 'roots', label: 'Roots', icon: Database },
-              ].map(tab => (
                 <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  disabled={loading}
-                  className={`
-                    flex-1 py-4 px-6 text-sm font-medium flex items-center justify-center gap-2 transition-all relative
-                    ${activeTab === tab.id ? 'text-indigo-400 bg-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}
-                    ${loading ? 'opacity-50 cursor-not-allowed' : ''}
-                  `}
+                  aria-label={`${
+                    bookmarked ? 'Unsave' : 'Save'
+                  } ${topic.title}`}
+                  aria-pressed={bookmarked}
+                  onClick={() => toggleBookmark(topic)}
+                  className="absolute right-3 top-3 z-10 rounded-lg bg-slate-950/60 p-2 text-white"
                 >
-                  <tab.icon className="w-4 h-4" />
-                  {tab.label}
-                  {tab.id === 'roots' && newRootsCount > 0 && (
-                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 animate-out fade-out duration-[3000ms]">
-                      +{newRootsCount}
-                    </span>
-                  )}
-                  {tab.id === 'roots' && deletedRootsCount > 0 && (
-                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400 animate-out fade-out duration-[3000ms]">
-                      -{deletedRootsCount}
-                    </span>
-                  )}
-                  {activeTab === tab.id && (
-                    <div className="absolute bottom-0 left-0 w-full h-0.5 bg-indigo-500 shadow-[0_-2px_8px_rgba(99,102,241,0.5)]"></div>
-                  )}
+                  <Bookmark
+                    className={`h-4 w-4 ${
+                      bookmarked
+                        ? 'fill-indigo-400 text-indigo-300'
+                        : ''
+                    }`}
+                  />
                 </button>
-              ))}
-            </div>
 
-            {/* Table Content */}
-            <div className="flex-1 overflow-auto custom-scrollbar bg-slate-900/50">
-              {loading && (
-                <div className="flex justify-center items-center h-full text-indigo-400 p-8">
-                  <Loader className="w-6 h-6 mr-2 animate-spin" />
-                  <p>Loading tables...</p>
+                <button
+                  onClick={() => {
+                    setSelectedId(topic.id);
+                    setPanel('lessons');
+                    setError('');
+                  }}
+                  aria-pressed={selected?.id === topic.id}
+                  className="w-full text-left"
+                >
+                  <Cover topic={topic} />
+
+                  <div className="space-y-3 p-4">
+                    <div>
+                      <h2
+                        className="font-arabic text-lg text-white"
+                        dir="rtl"
+                      >
+                        {topic.arabic}
+                      </h2>
+
+                      <p className="mt-1 text-sm text-slate-400">
+                        {topic.title}
+                      </p>
+                    </div>
+
+                    <div className="flex justify-between text-[10px] text-slate-500">
+                      <span>
+                        {topic.lessons.length} lessons ·{' '}
+                        {total} sentences
+                      </span>
+
+                      <span>{percent(done, total)}%</span>
+                    </div>
+
+                    <Progress done={done} total={total} />
+                    <Level value={topic.level} />
+                  </div>
+                </button>
+              </article>
+            );
+          })}
+
+          {filtered.length === 0 && (
+            <div className="col-span-full rounded-2xl border border-dashed border-slate-800 p-12 text-center text-slate-400">
+              <Search className="mx-auto mb-4 h-8 w-8 text-slate-600" />
+
+              <p>No matching topics.</p>
+
+              <button
+                onClick={() => {
+                  setQuery('');
+                  setCategory('All');
+                  setLevel('All levels');
+                  setOnlySaved(false);
+                }}
+                className="mt-4 text-sm text-indigo-400"
+              >
+                Clear Filters
+              </button>
+            </div>
+          )}
+        </div>
+
+        {selected && (
+          <aside className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 xl:sticky xl:top-0 xl:max-h-[calc(100vh-64px)] xl:overflow-y-auto custom-scrollbar">
+            <Cover topic={selected} large />
+
+            <div className="space-y-5 p-5">
+              <div className="flex justify-between gap-3">
+                <div>
+                  <h2
+                    className="font-arabic text-2xl text-white"
+                    dir="rtl"
+                  >
+                    {selected.arabic}
+                  </h2>
+
+                  <p className="mt-1 text-sm text-slate-400">
+                    {selected.title}
+                  </p>
+                </div>
+
+                <button
+                  aria-label="Save selected topic"
+                  aria-pressed={state.bookmarks.includes(
+                    selected.id
+                  )}
+                  onClick={() => toggleBookmark(selected)}
+                  className="self-start p-1 text-indigo-300"
+                >
+                  <Bookmark
+                    className={`h-5 w-5 ${
+                      state.bookmarks.includes(selected.id)
+                        ? 'fill-indigo-400'
+                        : ''
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <Level value={selected.level} />
+
+                <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+                  <Layers className="h-3 w-3" />
+                  {selected.lessons.length} lessons
+                </span>
+
+                <span className="text-xs text-slate-500">
+                  {allTopicSentences(selected).length} sentences
+                </span>
+              </div>
+
+              <div>
+                <h3 className="mb-2 text-sm font-semibold text-white">
+                  Description
+                </h3>
+
+                <p className="text-sm leading-relaxed text-slate-400">
+                  {selected.description}
+                </p>
+              </div>
+
+              <div>
+                <h3 className="mb-3 text-sm font-semibold text-white">
+                  What you'll learn
+                </h3>
+
+                <ul className="space-y-2">
+                  {selected.goals.map(goal => (
+                    <li
+                      key={goal}
+                      className="flex gap-2 text-xs text-slate-400"
+                    >
+                      <CheckCircle2 className="h-4 w-4 shrink-0 text-indigo-400" />
+                      {goal}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <button
+                onClick={() => startTopic(selected)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 text-sm font-medium text-white hover:bg-indigo-500"
+              >
+                <Play className="h-4 w-4" />
+
+                {topicCount(selected, state) ===
+                allTopicSentences(selected).length
+                  ? 'Review Topic'
+                  : topicCount(selected, state) > 0
+                    ? 'Continue Learning'
+                    : 'Start Learning'}
+              </button>
+
+              <div className="flex border-b border-slate-800">
+                {['lessons', 'sentences'].map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => {
+                      setPanel(tab);
+                      setError('');
+                    }}
+                    className={`
+                      flex-1 pb-3 text-xs font-medium
+                      ${
+                        panel === tab
+                          ? 'border-b-2 border-indigo-500 text-indigo-300'
+                          : 'text-slate-500'
+                      }
+                    `}
+                  >
+                    {tab === 'lessons'
+                      ? 'Lessons'
+                      : `All Sentences (${
+                          allTopicSentences(selected).length
+                        })`}
+                  </button>
+                ))}
+              </div>
+
+              {panel === 'lessons' ? (
+                <div className="space-y-3">
+                  {selected.lessons.map(
+                    (lesson, lessonIndex) => {
+                      const done = countStudied(lesson, state);
+                      const total = lesson.sentences.length;
+
+                      return (
+                        <button
+                          key={lesson.id}
+                          onClick={() =>
+                            openLesson(selected, lesson)
+                          }
+                          className="w-full rounded-xl border border-slate-800 bg-slate-950/40 p-4 text-left hover:border-indigo-500/40"
+                        >
+                          <div className="flex items-start gap-3">
+                            <span
+                              className={`
+                                flex h-7 w-7 shrink-0
+                                items-center justify-center
+                                rounded-lg text-xs
+                                ${
+                                  done === total
+                                    ? 'bg-emerald-500/10 text-emerald-400'
+                                    : 'bg-indigo-500/10 text-indigo-300'
+                                }
+                              `}
+                            >
+                              {done === total ? (
+                                <Check className="h-4 w-4" />
+                              ) : (
+                                lessonIndex + 1
+                              )}
+                            </span>
+
+                            <div className="min-w-0 flex-1">
+                              <h4 className="text-sm text-slate-200">
+                                {lesson.title}
+                              </h4>
+
+                              <p
+                                className="mt-1 font-arabic text-xs text-slate-500"
+                                dir="rtl"
+                              >
+                                {lesson.arabic}
+                              </p>
+
+                              <div className="my-2 flex justify-between text-[10px] text-slate-500">
+                                <span>{total} sentences</span>
+
+                                <span>
+                                  {done === total
+                                    ? 'Completed'
+                                    : `${done}/${total} studied`}
+                                </span>
+                              </div>
+
+                              <Progress
+                                done={done}
+                                total={total}
+                              />
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    }
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {selected.lessons.map(lesson => (
+                    <section
+                      key={lesson.id}
+                      className="space-y-3"
+                    >
+                      <h4 className="text-xs font-semibold text-indigo-300">
+                        {lesson.title}
+                      </h4>
+
+                      {lesson.sentences.map(
+                        (item, itemIndex) => (
+                          <div
+                            key={keyOf(lesson, itemIndex)}
+                            className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/40 p-3"
+                          >
+                            <p
+                              className="font-arabic text-xl leading-relaxed text-white"
+                              dir="rtl"
+                            >
+                              {item.arabic}
+                            </p>
+
+                            <p className="text-xs leading-relaxed text-slate-400">
+                              {item.translation}
+                            </p>
+
+                            {saveButton(item)}
+                          </div>
+                        )
+                      )}
+                    </section>
+                  ))}
                 </div>
               )}
-              
-              {!loading && (
-                <>
-                  {/* Sentences Table */}
-                  {activeTab === 'sentences' && (
-                    <table className="w-full text-left border-collapse">
-                      <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
-                        <tr>
-                          {['ID', 'Plaintext', 'Translation', 'Length', 'Complete'].map(h => (
-                            <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/50">
-                        {sentences.sort((a, b) => a.sentence_id - b.sentence_id).map(s => (
-                          <TableRow 
-                            key={s.sentence_id}
-                            isActive={selectedSentenceId === s.sentence_id}
-                            onClick={() => handleSentenceSelect(s)}
-                            data={s}
-                            columns={[
-                              { key: 'sentence_id', render: d => <span className="font-mono text-slate-500">#{d.sentence_id}</span> },
-                              { key: 'plaintext', isArabic: true },
-                              { key: 'translation' },
-                              { key: 'length', render: d => <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-400">{d.length} words</span> },
-                              { key: 'complete', render: d => (
-                                <div className="flex items-center gap-2">
-                                   {d.complete ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <XCircle className="w-4 h-4 text-slate-600" />}
-                                  <span className={d.complete ? "text-emerald-500" : "text-slate-600"}>{d.complete ? "Yes" : "No"}</span>
-                                </div>
-                              )}
-                            ]}
-                          />
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
 
-                  {/* Words Table */}
-                  {activeTab === 'words' && (
-                    <table className="w-full text-left border-collapse">
-                      <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
-                        <tr>
-                          {['ID', 'Root ID', 'Plaintext', 'Translation', 'Freq', 'Known'].map(h => (
-                            <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/50">
-                        {words.sort((a, b) => a.word_id - b.word_id).map(w => (
-                          <tr 
-                            key={w.word_id}
-                            ref={el => wordRefs.current[w.word_id] = el}
-                            onClick={() => handleTableWordClick(w)}
-                            className={`
-                              border-b border-slate-800/50 transition-colors duration-500 cursor-pointer
-                              ${highlightedWordId === w.word_id ? 'bg-indigo-500/20' : 'hover:bg-slate-800/30'}
-                            `}
-                          >
-                            <td className="p-4 text-sm font-mono text-slate-500">#{w.word_id}</td>
-                            <td className="p-4 text-sm font-mono text-indigo-400">R-{w.root_id}</td>
-                            <td className="p-4 text-lg font-arabic text-slate-200" dir="rtl">{w.plaintext}</td>
-                            <td className="p-4 text-sm text-slate-300">{w.translation}</td>
-                            <td className="p-4 text-sm text-slate-400"><FrequencyBar value={w.frequency} /></td>
-                            <td className="p-4 text-sm">
-                              <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${w.known ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-                                {w.known ? 'Known' : 'Learning'}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-
-                  {/* Roots Table */}
-                  {activeTab === 'roots' && (
-                    <table className="w-full text-left border-collapse">
-                      <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
-                        <tr>
-                          {['ID', 'Root', 'Translation'].map(h => (
-                            <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/50">
-                        {roots.sort((a, b) => a.root_id - b.root_id).map(r => (
-                          <tr key={r.root_id} ref={el => rootRefs.current[r.root_id] = el} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                            <td className="p-4 text-sm font-mono text-slate-500">#{r.root_id}</td>
-                            <td className="p-4 text-xl font-arabic text-indigo-400" dir="rtl">{r.plaintext}</td>
-                            <td className="p-4 text-sm text-slate-300">{r.translation}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </>
+              {error && (
+                <p
+                  role="alert"
+                  className="text-sm text-rose-300"
+                >
+                  {error}
+                </p>
               )}
             </div>
-          </>
+          </aside>
         )}
-      </section>
+      </div>
     </div>
   );
-}
+};
 
 export default LibraryView;
