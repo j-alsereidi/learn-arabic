@@ -1,7 +1,7 @@
 import React, {
   useEffect,
   useRef,
-  useState
+  useState,
 } from 'react';
 
 const cache = new Map();
@@ -15,26 +15,26 @@ function schedule(task) {
   });
 }
 
+function finishJob() {
+  running -= 1;
+  pump();
+}
+
 function pump() {
   while (running < 3 && queue.length) {
     const job = queue.shift();
-
     running += 1;
 
     Promise.resolve()
       .then(job.task)
       .catch(() => null)
       .then(job.resolve)
-      .finally(() => {
-        running -= 1;
-        pump();
-      });
+      .finally(finishJob);
   }
 }
 
 async function wiki(parameters) {
   const controller = new AbortController();
-
   const timer = setTimeout(
     () => controller.abort(),
     10000
@@ -45,14 +45,14 @@ async function wiki(parameters) {
       action: 'query',
       format: 'json',
       origin: '*',
-      ...parameters
+      ...parameters,
     });
 
     const response = await fetch(
       `https://en.wikipedia.org/w/api.php?${query}`,
       {
         signal: controller.signal,
-        credentials: 'omit'
+        credentials: 'omit',
       }
     );
 
@@ -78,9 +78,7 @@ const plain = html =>
     .body.textContent.trim();
 
 const safeLink = url =>
-  /^https:\/\//i.test(url || '')
-    ? url
-    : undefined;
+  /^https:\/\//i.test(url || '') ? url : undefined;
 
 function loadPhoto(subject) {
   if (!cache.has(subject)) {
@@ -92,7 +90,7 @@ function loadPhoto(subject) {
           redirects: '1',
           prop: 'pageimages',
           piprop: 'name',
-          pilicense: 'free'
+          pilicense: 'free',
         });
 
         const name = pages.find(
@@ -105,7 +103,7 @@ function loadPhoto(subject) {
           titles: `File:${name}`,
           prop: 'imageinfo',
           iiprop: 'url|extmetadata',
-          iiurlwidth: '640'
+          iiurlwidth: '640',
         });
 
         const info = files.find(
@@ -113,29 +111,14 @@ function loadPhoto(subject) {
         )?.imageinfo[0];
 
         const metadata = info?.extmetadata || {};
-
-        const artist = plain(
-          metadata.Artist?.value
-        );
-
+        const artist = plain(metadata.Artist?.value);
         const license = plain(
           metadata.LicenseShortName?.value
         );
+        const source = safeLink(info?.descriptionurl);
+        const url = safeLink(info?.thumburl || info?.url);
 
-        const source = safeLink(
-          info?.descriptionurl
-        );
-
-        const url = safeLink(
-          info?.thumburl || info?.url
-        );
-
-        if (
-          !url ||
-          !source ||
-          !artist ||
-          !license
-        ) {
+        if (!url || !source || !artist || !license) {
           return null;
         }
 
@@ -144,9 +127,7 @@ function loadPhoto(subject) {
           source,
           artist,
           license,
-          licenseUrl: safeLink(
-            metadata.LicenseUrl?.value
-          )
+          licenseUrl: safeLink(metadata.LicenseUrl?.value),
         };
       })
     );
@@ -158,10 +139,9 @@ function loadPhoto(subject) {
 export default function LibraryPhoto({
   subject,
   src,
-  label
+  label,
 }) {
   const box = useRef(null);
-
   const [visible, setVisible] = useState(false);
   const [photo, setPhoto] = useState(null);
   const [failed, setFailed] = useState(false);
@@ -175,9 +155,7 @@ export default function LibraryPhoto({
 
     const observer = new IntersectionObserver(
       entries => {
-        if (
-          entries.some(entry => entry.isIntersecting)
-        ) {
+        if (entries.some(entry => entry.isIntersecting)) {
           setVisible(true);
           observer.disconnect();
         }
@@ -185,9 +163,7 @@ export default function LibraryPhoto({
       { rootMargin: '150px' }
     );
 
-    if (box.current) {
-      observer.observe(box.current);
-    }
+    if (box.current) observer.observe(box.current);
 
     return () => observer.disconnect();
   }, []);
@@ -214,37 +190,31 @@ export default function LibraryPhoto({
 
   const url = src || photo?.url;
 
+  function retry() {
+    cache.delete(subject);
+    setFailed(false);
+    setAttempt(value => value + 1);
+  }
+
   return (
-    <figure
-      className="vl-photo"
-      ref={box}
-    >
+    <figure className="vl-photo" ref={box}>
       <div className="vl-image-area">
         {!failed && visible && url ? (
           <img
             src={url}
-            alt={`${label || subject} — illustrative image`}
+            alt={label || subject}
             loading="lazy"
             onError={() => setFailed(true)}
           />
         ) : (
           <div className="vl-photo-placeholder">
             <span aria-hidden="true">▧</span>
-
             <span>
-              {failed
-                ? 'Photo unavailable'
-                : 'Loading photo…'}
+              {failed ? 'Photo unavailable' : 'Loading photo…'}
             </span>
 
             {failed && (
-              <button
-                onClick={() => {
-                  cache.delete(subject);
-                  setFailed(false);
-                  setAttempt(value => value + 1);
-                }}
-              >
+              <button onClick={retry}>
                 Retry image
               </button>
             )}
@@ -263,10 +233,7 @@ export default function LibraryPhoto({
           </a>
         ) : photo && !failed ? (
           <>
-            <span>
-              Illustration: {subject}.{' '}
-            </span>
-
+            <span>Illustration: {subject}. </span>
             <a
               href={photo.source}
               target="_blank"
@@ -274,14 +241,9 @@ export default function LibraryPhoto({
             >
               {photo.artist}
             </a>
-
             {' · '}
-
             <a
-              href={
-                photo.licenseUrl ||
-                photo.source
-              }
+              href={photo.licenseUrl || photo.source}
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -289,9 +251,7 @@ export default function LibraryPhoto({
             </a>
           </>
         ) : (
-          <span>
-            Illustration for: {subject}
-          </span>
+          <span>Illustration for: {subject}</span>
         )}
       </figcaption>
     </figure>
