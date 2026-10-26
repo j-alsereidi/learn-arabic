@@ -1,27 +1,16 @@
 from flask import Blueprint, jsonify, request, Response
-from .models import Sentence, Word, Root, WordInstance
+from .models import Sentence, Word, Lemma, WordInstance, nfc, prune, bare, find_lemma, new_lemma
 from .extensions import db
 from deep_translator import GoogleTranslator
-from tashaphyne.stemming import ArabicLightStemmer
-import nltk
-from nltk.stem.isri import ISRIStemmer
 from .communications import openai_response, gemini_response
-from dotenv import load_dotenv
-from typing import Dict
-import os
+import json
+import re
 import string
+import urllib.request
 
 main = Blueprint('main', __name__)
 
-# --- INITIALIZATION ---
-tashaphyne_stemmer = ArabicLightStemmer()
-isri_stemmer = ISRIStemmer()
-load_dotenv()
-
-try:
-    nltk.data.find('tokenizers/punkt_tab')
-except LookupError:
-    nltk.download('punkt_tab')
+CAMELIRA_URL = 'https://camelira.abudhabi.nyu.edu/api/disambig'
 
 # --- HELPER FUNCTIONS ---
 
@@ -31,6 +20,28 @@ def clean_punctuation(text):
     translator = str.maketrans('', '', punctuation)
     return text.translate(translator).strip()
 
+def lemmatize(sentence):
+    """{surface word: top Camelira analysis}; analysis['lex'] is what Camelira's 'Lemmatized' view shows."""
+    req = urllib.request.Request(
+        CAMELIRA_URL,
+        json.dumps({'dialect': 'auto', 'sentence': sentence}).encode(),
+        {'Content-Type': 'application/json'}
+    )
+    with urllib.request.urlopen(req, timeout=20) as res:
+        disambig = json.load(res)['output']['disambig']
+    return {w['word']: w['analyses'][0]['analysis'] for w in disambig if w['analyses']}
+
+def link_lemma(text, translation):
+    """Existing lemma for text (creating it if missing), with translation applied when given."""
+    lemma = find_lemma(text, translation)
+    if not lemma:
+        lemma = new_lemma(text)
+        db.session.add(lemma)
+    if translation:
+        lemma.translation = translation
+    db.session.flush()
+    return lemma
+
 def calculate_completeness(sentence):
     """
     Determines if a sentence is complete based on database state.
@@ -38,72 +49,39 @@ def calculate_completeness(sentence):
     1. Sentence has a translation (and is not empty).
     2. All words are resolved (linked via WordInstance OR exact match OR unique fuzzy match).
     """
-    # 1. Check if Sentence has translation
     if not sentence.translation or not sentence.translation.strip():
         return False
     if not sentence.plaintext:
         return False
 
-    tokens = sentence.plaintext.split()
+    instances = {i.index for i in WordInstance.query.filter_by(sentence_id=sentence.sentence_id).all()}
 
-    # Get explicit instances for this sentence
-    instances = {i.index: i.word_id for i in WordInstance.query.filter_by(sentence_id=sentence.sentence_id).all()}
-
-    for idx, raw_token in enumerate(tokens):
-        # 2. Check Explicit Link (WordInstance)
-        if idx in instances:
-            continue
-
-        # 3. Clean punctuation
+    for idx, raw_token in enumerate(sentence.plaintext.split()):
         token = clean_punctuation(raw_token)
-        if not token:
-            continue  # Ignore pure punctuation
-
-        # 4. Check Exact Match
-        exact_matches = Word.query.filter_by(plaintext=token).first()
-        if exact_matches:
+        if idx in instances or not token:
             continue
-
-        # 5. Check Pruned/Fuzzy Match (for Ambiguity)
-        tashaphyne_stemmer.light_stem(token)
-        pruned_token = tashaphyne_stemmer.get_unvocalized()
-
-        fuzzy_matches = Word.query.filter_by(prune=pruned_token).all()
-
-        if len(fuzzy_matches) == 1:
-            # Single fuzzy match -> Valid
+        if Word.query.filter_by(plaintext=token).first():
             continue
-
-        # If no match or ambiguous (multiple matches), it's incomplete
-        return False
+        # Single fuzzy match -> valid; none or ambiguous -> incomplete
+        if Word.query.filter_by(prune=prune(token)).count() != 1:
+            return False
 
     return True
 
 def update_sentence_completeness(sentence):
-    """Helper to calculate and save completeness."""
-    is_complete = calculate_completeness(sentence)
-    if sentence.complete != is_complete:
-        sentence.complete = is_complete
-        return True
-    return False
+    sentence.complete = calculate_completeness(sentence)
 
-def get_environment_variables() -> Dict[str, str]:
-    """
-    Returns relevant environment variables for debugging and frontend display.
-    """
-    env_vars = dict(os.environ)
-    return env_vars
+def update_completeness_matching(*texts):
+    """Re-checks every sentence containing any of the given words."""
+    for t in texts:
+        for s in Sentence.query.filter(Sentence.plaintext.like(f'%{t}%')).all():
+            update_sentence_completeness(s)
 
 # --- API ENDPOINTS ---
 
 @main.route('/')
 def home():
     return jsonify({"status": "API is running. Frontend is hosted separately."})
-
-@main.route('/get-data')
-def get_data():
-    row = Sentence.query.first()
-    return jsonify({'message': row.plaintext if row else "No data found"})
 
 @main.route('/api/sentences')
 def api_sentences():
@@ -116,27 +94,53 @@ def api_sentences():
         'length': s.length
     } for s in sentences])
 
+def relevant_words():
+    """Words the frontend needs: added by hand, or matching a token in some sentence.
+    Skips the ~40k self-words of unused lemmas, which would only bloat the payload."""
+    prunes = {prune(clean_punctuation(t)) for (text,) in db.session.query(Sentence.plaintext) for t in text.split()}
+    return db.select(Word.word_id).join(Lemma).where(Word.prune.in_(prunes) | (Word.plaintext != Lemma.plaintext))
+
+def lemma_json(l):
+    return {'lemma_id': l.lemma_id, 'plaintext': l.plaintext, 'translation': l.translation, 'known': l.known}
+
 @main.route('/api/words')
 def api_words():
-    words = Word.query.all()
+    words = Word.query.filter(Word.word_id.in_(relevant_words())).all()
     return jsonify([{
         'word_id': w.word_id,
         'plaintext': w.plaintext,
         'translation': w.translation,
-        'frequency': w.frequency,
-        'known': w.known,
-        'root_id': w.root_id,
+        'lemma_id': w.lemma_id,
         'prune': w.prune
     } for w in words])
 
-@main.route('/api/roots')
-def api_roots():
-    roots = Root.query.all()
-    return jsonify([{
-        'root_id': r.root_id,
-        'plaintext': r.plaintext,
-        'translation': r.translation
-    } for r in roots])
+@main.route('/api/lemmas')
+def api_lemmas():
+    """Known lemmas plus those of the words /api/words sends; the Lemmas tab searches the rest."""
+    used = db.select(Word.lemma_id).where(Word.word_id.in_(relevant_words()))
+    return jsonify([lemma_json(l) for l in Lemma.query.filter(Lemma.known | Lemma.lemma_id.in_(used))])
+
+BUCKWALTER = str.maketrans(dict(zip(
+    "'|>&<}AbptvjHxd*rzs$SDTZEg_fqklmnhwYyFNKaui~o`{",
+    "ءآأؤإئابةتثجحخدذرزسشصضطظعغـفقكلمنهوىيًٌٍَُِّْٰٱ"
+)))
+
+@main.route('/api/lemmas/search')
+def search_lemmas():
+    """Lemmas matching an ID, Arabic (diacritics optional), Buckwalter, or English gloss text; most frequent first."""
+    q = request.args.get('q', '').strip()
+    query = Lemma.query
+    if q.isdigit():
+        query = query.filter(Lemma.lemma_id == int(q))
+    elif q:
+        is_arabic = re.search(r'[؀-ۿ]', q)
+        letters = bare(q if is_arabic else q.translate(BUCKWALTER))  # empty if q was only vowels/diacritics
+        matches = [Lemma.bare.contains(letters)] if letters else []
+        if not is_arabic:
+            # Latin text is either Buckwalter or gloss; ' ' -> '_' matches the gloss's underscores (and spaces, as a LIKE wildcard)
+            matches.append(Lemma.translation.ilike(f"%{q.replace(' ', '_')}%"))
+        query = query.filter(db.or_(db.false(), *matches))
+    return jsonify([lemma_json(l) for l in query.order_by(Lemma.lemma_id).limit(200)])
 
 @main.route('/api/word-instances')
 def api_word_instances():
@@ -214,142 +218,66 @@ def translate_text():
 
 @main.route('/suggest-words', methods=['POST'])
 def suggest_words():
+    """Suggests a translation and lemma for each word, lemmatized by Camelira in the context of `sentence`."""
     data = request.get_json()
-    words_input = data.get('words', [])
-    suggestions = []
+    words = [w for w in map(clean_punctuation, data.get('words', [])) if w]
     translator = GoogleTranslator(source='ar', target='en')
-
-    for raw_word_text in words_input:
-        word_text = clean_punctuation(raw_word_text)
-        if not word_text:
-            continue
-
-        try:
-            tashaphyne_stemmer.light_stem(word_text)
-            root_text = tashaphyne_stemmer.get_root()
-            word_translation = translator.translate(word_text)
-            root_translation = translator.translate(root_text) if root_text else ""
-
-            suggestions.append({
-                'plaintext': word_text,
-                'translation': word_translation,
-                'root_plaintext': root_text,
-                'root_translation': root_translation
-            })
-        except Exception:
-            suggestions.append({
-                'plaintext': word_text,
-                'translation': "Error",
-                'root_plaintext': "Error",
-                'root_translation': "Error"
-            })
-
-    return jsonify(suggestions)
-
-@main.route('/suggest-words-isri', methods=['POST'])
-def suggest_words_isri():
-    data = request.get_json()
-    words_input = data.get('words', [])
     suggestions = []
-    translator = GoogleTranslator(source='ar', target='en')
 
-    for raw_word_text in words_input:
-        word_text = clean_punctuation(raw_word_text)
-        if not word_text:
-            continue
+    try:
+        analyses = lemmatize(data.get('sentence') or ' '.join(words))
+    except Exception as e:
+        print(f"Camelira Error: {e}")
+        analyses = {}
 
+    for word_text in words:
         try:
-            root_text = isri_stemmer.stem(word_text)
-            word_translation = translator.translate(word_text)
-            root_translation = translator.translate(root_text) if root_text else ""
-
-            suggestions.append({
-                'plaintext': word_text,
-                'translation': word_translation,
-                'root_plaintext': root_text,
-                'root_translation': root_translation
-            })
+            analysis = analyses.get(word_text) or lemmatize(word_text).get(word_text, {})
         except Exception:
-            suggestions.append({
-                'plaintext': word_text,
-                'translation': "Error",
-                'root_plaintext': "Error",
-                'root_translation': "Error"
-            })
+            analysis = {}
+        try:
+            translation = translator.translate(word_text)
+        except Exception as e:
+            print(f"Translation Error: {e}")
+            translation = ""
+
+        stemgloss = re.sub(r'_\[\w+\]', '', analysis.get('stemgloss', ''))
+        lemma = find_lemma(analysis.get('lex', ''), stemgloss)
+        suggestions.append({
+            'plaintext': word_text,
+            'translation': translation,
+            'lemma_plaintext': lemma.plaintext if lemma else nfc(analysis.get('lex')),
+            'lemma_translation': lemma.translation if lemma else stemgloss
+        })
 
     return jsonify(suggestions)
 
 @main.route('/add-words', methods=['POST'])
 def add_words():
     data = request.get_json()
-    confirmed_items = data.get('items', [])
-    new_roots_count = 0
-    new_words_count = 0
     added_plaintexts = []
 
     try:
-        for item in confirmed_items:
+        for item in data.get('items', []):
             word_text = clean_punctuation(item.get('plaintext', ''))
-            word_trans = item.get('translation')
-            root_text = item.get('root_plaintext')
-            root_trans = item.get('root_translation')
+            lemma_text = item.get('lemma_plaintext')
 
-            if not word_text or not root_text:
+            if not word_text or not lemma_text:
                 continue
 
-            existing_root = Root.query.filter_by(plaintext=root_text).first()
-            if existing_root:
-                root_id = existing_root.root_id
-            else:
-                new_root = Root(plaintext=root_text, translation=root_trans)
-                db.session.add(new_root)
-                db.session.flush()
-                root_id = new_root.root_id
-                new_roots_count += 1
-
-            tashaphyne_stemmer.light_stem(word_text)
-            prune_text = tashaphyne_stemmer.get_unvocalized()
-
-            new_word = Word(
-                root_id=root_id,
+            lemma = link_lemma(lemma_text, item.get('lemma_translation'))
+            db.session.add(Word(
+                lemma_id=lemma.lemma_id,
                 plaintext=word_text,
-                translation=word_trans,
-                prune=prune_text,
-                frequency=50,
-                known=False
-            )
-            db.session.add(new_word)
-            new_words_count += 1
+                translation=item.get('translation'),
+                prune=prune(word_text)
+            ))
             added_plaintexts.append(word_text)
 
+        db.session.flush()
+        update_completeness_matching(*added_plaintexts)
         db.session.commit()
-
-        incomplete_sentences = Sentence.query.filter_by(complete=False).all()
-        for sent in incomplete_sentences:
-            for w in added_plaintexts:
-                if w in sent.plaintext:
-                    update_sentence_completeness(sent)
-                    break
-
-        db.session.commit()
-        return jsonify({'success': True, 'new_roots_count': new_roots_count, 'new_words_count': new_words_count})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-@main.route('/api/update-root/<int:root_id>', methods=['PUT'])
-def update_root(root_id):
-    data = request.get_json()
-    try:
-        root = Root.query.get(root_id)
-        if not root:
-            return jsonify({'error': 'Root not found'}), 404
-
-        root.plaintext = data.get('plaintext', root.plaintext)
-        root.translation = data.get('translation', root.translation)
-
-        db.session.commit()
-        return jsonify({'success': True})
+        return jsonify({'success': True, 'new_words_count': len(added_plaintexts)})
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -361,63 +289,24 @@ def update_word(word_id):
         word = Word.query.get(word_id)
         if not word:
             return jsonify({'error': 'Word not found'}), 404
+        if not data.get('lemma_plaintext'):
+            return jsonify({'error': 'Missing lemma'}), 400
 
-        old_root_id = word.root_id
         old_plaintext = word.plaintext
-
-        new_plaintext = clean_punctuation(data.get('plaintext', ''))
-        new_translation = data.get('translation')
-        new_root_text = data.get('root_plaintext')
-        new_root_trans = data.get('root_translation')
-
-        word.plaintext = new_plaintext
-        word.translation = new_translation
-
-        tashaphyne_stemmer.light_stem(new_plaintext)
-        word.prune = tashaphyne_stemmer.get_unvocalized()
-
-        existing_root = Root.query.filter_by(plaintext=new_root_text).first()
-        new_root_created = False
-        deleted_root = False
-
-        if existing_root:
-            if new_root_trans:
-                existing_root.translation = new_root_trans
-            word.root_id = existing_root.root_id
-        else:
-            new_root = Root(plaintext=new_root_text, translation=new_root_trans)
-            db.session.add(new_root)
-            db.session.flush()
-            word.root_id = new_root.root_id
-            new_root_created = True
-
+        word.plaintext = clean_punctuation(data.get('plaintext', ''))
+        word.translation = data.get('translation')
+        word.prune = prune(word.plaintext)
+        word.lemma_id = link_lemma(data.get('lemma_plaintext'), data.get('lemma_translation')).lemma_id
         db.session.flush()
 
-        if old_root_id != word.root_id:
-            remaining = Word.query.filter_by(root_id=old_root_id).count()
-            if remaining == 0:
-                old_root = Root.query.get(old_root_id)
-                if old_root:
-                    db.session.delete(old_root)
-                    deleted_root = True
-
-        sents_old = Sentence.query.filter(Sentence.plaintext.like(f'%{old_plaintext}%')).all()
-        for s in sents_old:
-            update_sentence_completeness(s)
-
-        if new_plaintext != old_plaintext:
-            sents_new = Sentence.query.filter(Sentence.plaintext.like(f'%{new_plaintext}%')).all()
-            for s in sents_new:
-                update_sentence_completeness(s)
-
-        linked = WordInstance.query.filter_by(word_id=word_id).all()
-        for inst in linked:
+        update_completeness_matching(old_plaintext, word.plaintext)
+        for inst in WordInstance.query.filter_by(word_id=word_id).all():
             s = Sentence.query.get(inst.sentence_id)
             if s:
                 update_sentence_completeness(s)
 
         db.session.commit()
-        return jsonify({'success': True, 'new_root_created': new_root_created, 'deleted_root': deleted_root})
+        return jsonify({'success': True})
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -444,31 +333,21 @@ def delete_word(word_id):
         if not word:
             return jsonify({'error': 'Word not found'}), 404
 
-        root_id = word.root_id
-        word_plain = word.plaintext
-        linked_ids = [i.sentence_id for i in WordInstance.query.filter_by(word_id=word_id).all()]
-
+        linked = WordInstance.query.filter_by(word_id=word_id).all()
+        linked_ids = [i.sentence_id for i in linked]
+        for inst in linked:
+            db.session.delete(inst)
         db.session.delete(word)
         db.session.flush()
-
-        deleted_root = False
-        if Word.query.filter_by(root_id=root_id).count() == 0:
-            root = Root.query.get(root_id)
-            if root:
-                db.session.delete(root)
-                deleted_root = True
 
         for sid in linked_ids:
             s = Sentence.query.get(sid)
             if s:
                 update_sentence_completeness(s)
-
-        text_matches = Sentence.query.filter(Sentence.plaintext.like(f'%{word_plain}%')).all()
-        for s in text_matches:
-            update_sentence_completeness(s)
+        update_completeness_matching(word.plaintext)
 
         db.session.commit()
-        return jsonify({'success': True, 'deleted_root': deleted_root})
+        return jsonify({'success': True})
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -540,13 +419,13 @@ def twilio_webhook():
         db.session.rollback()
         return Response("<Response><Message>Error</Message></Response>", mimetype='text/xml')
 
-@main.route('/api/toggle-known/<int:word_id>', methods=['POST'])
-def toggle_known(word_id):
+@main.route('/api/set-known/<int:lemma_id>', methods=['POST'])
+def set_known(lemma_id):
     try:
-        word = Word.query.get_or_404(word_id)
-        word.known = not word.known
+        lemma = Lemma.query.get_or_404(lemma_id)
+        lemma.known = bool(request.get_json()['known'])
         db.session.commit()
-        return jsonify({'success': True, 'new_known': word.known})
+        return jsonify({'success': True, 'known': lemma.known})
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -610,8 +489,3 @@ def api_llm_gemini():
 
     # PoC: always return 200 (even if violations exist) so frontend can display errors nicely
     return jsonify(result), 200
-
-@main.route('/env-vars', methods=['GET'])
-def env_vars_endpoint():
-    env_vars = get_environment_variables()
-    return jsonify(env_vars)

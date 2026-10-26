@@ -8,6 +8,7 @@ import {
   AlertCircle,
   Loader 
 } from 'lucide-react';
+import Gloss from './Gloss';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
@@ -17,19 +18,12 @@ const stripDiacritics = (text) => {
     return text
         .normalize('NFD')
         .replace(/[\u064B-\u065F\u0640\u0670]/g, '')
-        .replace(/[،؛؟!.,;:]/g, ''); 
+        .replace(/[،؛؟!.,;:]/g, '');
 };
 
-// --- Sub-Components ---
-const InteractiveSentence = ({ 
-    sentence, 
-    words, 
-    roots, 
-    wordInstances, 
-    stagedChanges, 
-    toggleWordStage 
-}) => {
-    const tokens = sentence.plaintext.split(' ').map((token, index) => {
+// Each token's lemma: explicit link, else exact word match, else unique fuzzy match
+const sentenceLemmas = (sentence, words, lemmas, wordInstances) =>
+    sentence.plaintext.split(' ').map((token, index) => {
         const explicitLink = wordInstances.find(i => i.sentence_id === sentence.sentence_id && i.index === index);
         let match = null;
 
@@ -39,64 +33,54 @@ const InteractiveSentence = ({
             const cleanToken = token.replace(/[،؛؟!.,;:]/g, '');
             match = words.find(w => w.plaintext === cleanToken || w.plaintext === token);
             if (!match) {
-                const prunedToken = stripDiacritics(cleanToken);
-                const fuzzyMatches = words.filter(w => w.prune === prunedToken);
-                if (fuzzyMatches.length === 1) {
-                    match = fuzzyMatches[0];
-                }
+                const fuzzyMatches = words.filter(w => w.prune === stripDiacritics(cleanToken));
+                if (fuzzyMatches.length === 1) match = fuzzyMatches[0];
             }
         }
 
-        const rootData = match ? roots.find(r => r.root_id === match.root_id) : null;
-        return { text: token, match, rootData };
+        return { text: token, lemma: match && lemmas.find(l => l.lemma_id === match.lemma_id) };
     });
 
+// --- Sub-Components ---
+const InteractiveSentence = ({ tokens, stagedChanges, toggleLemmaStage }) => {
     return (
         <div className="flex flex-wrap justify-center gap-3 text-3xl md:text-4xl leading-relaxed font-arabic" dir="rtl">
             {tokens.map((t, idx) => {
-                const wordId = t.match?.word_id;
-                
-                // Logic: Check staged changes first, fallback to original database state
-                // If stagedChanges[wordId] is undefined, it hasn't been touched.
-                const dbKnown = t.match?.known ?? false;
-                const isKnown = wordId && stagedChanges[wordId] !== undefined 
-                    ? stagedChanges[wordId] 
-                    : dbKnown;
+                // Staged changes win over the database state; a missing key means untouched.
+                const lemmaId = t.lemma?.lemma_id;
+                const isKnown = stagedChanges[lemmaId] ?? t.lemma?.known ?? false;
 
                 return (
                     <div key={idx} className="relative inline-block group">
                         <span
                             onClick={(e) => {
                                 e.stopPropagation();
-                                if (!t.match || !wordId) return;
-                                toggleWordStage(wordId, isKnown);
+                                if (t.lemma) toggleLemmaStage(lemmaId, isKnown);
                             }}
                             className={`
                                 relative px-1 cursor-pointer transition-all duration-300 select-none
                                 ${isKnown ? 'text-emerald-300' : 'text-rose-400'}
-                                ${t.match 
+                                ${t.lemma 
                                     ? (isKnown 
                                         ? 'hover:text-emerald-200 drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]' 
                                         : 'hover:text-rose-300 drop-shadow-[0_0_8px_rgba(251,113,133,0.5)]')
                                     : 'text-rose-400/50 opacity-70'
                                 }
                             `}
-                            style={t.match ? {
+                            style={t.lemma ? {
                                 filter: `drop-shadow(0 0 ${isKnown ? '1px rgba(52, 211, 153, 0.4)' : '1px rgba(251, 113, 133, 0.4)'})`
                             } : {}}
                         >
                             {t.text}
                         </span>
 
-                        {t.match && (
+                        {t.lemma && (
                             <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none z-20">
                                 <div className="bg-slate-800 text-xs rounded-lg shadow-xl border border-slate-700 p-2 min-w-[120px] text-center">
                                     <div className="font-bold text-indigo-400 mb-0.5">
-                                        {t.rootData?.plaintext || 'No Root'}
+                                        {t.lemma.plaintext}
                                     </div>
-                                    <div className="text-slate-300">
-                                        {t.rootData?.translation || 'No translation'}
-                                    </div>
+                                    <Gloss text={t.lemma.translation} />
                                     <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
                                 </div>
                             </div>
@@ -119,11 +103,11 @@ const FlashcardEditor = () => {
     const [isAnimating, setIsAnimating] = useState(false);
 
     const [words, setWords] = useState([]);
-    const [roots, setRoots] = useState([]);
+    const [lemmas, setLemmas] = useState([]);
     const [wordInstances, setWordInstances] = useState([]);
 
     // Stores manual toggles for the CURRENT card only.
-    // Structure: { [wordId]: boolean }
+    // Structure: { [lemmaId]: boolean }
     // If a key is missing, it means it hasn't been touched (use DB state).
     const [stagedChanges, setStagedChanges] = useState({});
 
@@ -131,22 +115,22 @@ const FlashcardEditor = () => {
         const fetchCards = async () => {
             try {
                 setLoading(true);
-                const [sRes, wRes, rRes, iRes] = await Promise.all([
+                const [sRes, wRes, lRes, iRes] = await Promise.all([
                     fetch(`${API_BASE}/api/sentences`),
                     fetch(`${API_BASE}/api/words`),
-                    fetch(`${API_BASE}/api/roots`),
+                    fetch(`${API_BASE}/api/lemmas`),
                     fetch(`${API_BASE}/api/word-instances`)
                 ]);
-                
-                const [sData, wData, rData, iData] = await Promise.all([
-                    sRes.json(), wRes.json(), rRes.json(), iRes.json()
+
+                const [sData, wData, lData, iData] = await Promise.all([
+                    sRes.json(), wRes.json(), lRes.json(), iRes.json()
                 ]);
 
                 const validCards = sData.filter(s => s.complete);
                 setCards(validCards);
-                
+
                 setWords(wData);
-                setRoots(rData);
+                setLemmas(lData);
                 setWordInstances(iData);
             } catch (err) {
                 console.error("Failed to load flashcards:", err);
@@ -163,10 +147,12 @@ const FlashcardEditor = () => {
         setIsFlipped(false);
     }, [currentIndex]);
 
-    const toggleWordStage = (wordId, currentKnownStatus) => {
+    const tokens = cards[currentIndex] ? sentenceLemmas(cards[currentIndex], words, lemmas, wordInstances) : [];
+
+    const toggleLemmaStage = (lemmaId, currentKnownStatus) => {
         setStagedChanges(prev => ({
             ...prev,
-            [wordId]: !currentKnownStatus
+            [lemmaId]: !currentKnownStatus
         }));
     };
 
@@ -176,19 +162,19 @@ const FlashcardEditor = () => {
 
         // 1. Update Backend
         await Promise.all(
-            updates.map(({ id }) => 
-                fetch(`${API_BASE}/api/toggle-known/${id}`, { method: 'POST' })
-                    .catch(err => console.error(`Failed to save word ${id}:`, err))
+            updates.map(({ id, known }) =>
+                fetch(`${API_BASE}/api/set-known/${id}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ known })
+                }).catch(err => console.error(`Failed to save lemma ${id}:`, err))
             )
         );
 
-        // 2. Update Frontend State (Words)
-        setWords(prev => prev.map(w => {
-            const update = updates.find(u => u.id === w.word_id);
-            if (update) {
-                return { ...w, known: update.known };
-            }
-            return w;
+        // 2. Update Frontend State (Lemmas)
+        setLemmas(prev => prev.map(l => {
+            const update = updates.find(u => u.id === l.lemma_id);
+            return update ? { ...l, known: update.known } : l;
         }));
     };
 
@@ -234,43 +220,12 @@ const FlashcardEditor = () => {
         changeCard('next');
     };
 
-    // EASY: Reset staged, Find all unknown words in sentence, Mark them known, Submit.
+    // EASY: Ignore staged changes, mark every unknown lemma in the sentence known.
     const handleEasy = async () => {
-        const currentCard = cards[currentIndex];
-        
-        // 1. Identify all words in current sentence
-        const sentenceTokens = currentCard.plaintext.split(' ');
-        const wordIdsInSentence = new Set();
-
-        sentenceTokens.forEach((token, index) => {
-            // Try explicit link
-            const explicit = wordInstances.find(i => i.sentence_id === currentCard.sentence_id && i.index === index);
-            if (explicit) {
-                wordIdsInSentence.add(explicit.word_id);
-                return;
-            }
-            // Try text match
-            const cleanToken = token.replace(/[،؛؟!.,;:]/g, '');
-            let match = words.find(w => w.plaintext === cleanToken || w.plaintext === token);
-            if (!match) {
-                 const pruned = stripDiacritics(cleanToken);
-                 const fuzzy = words.filter(w => w.prune === pruned);
-                 if (fuzzy.length === 1) match = fuzzy[0];
-            }
-            if (match) wordIdsInSentence.add(match.word_id);
-        });
-
-        // 2. Find which of these are currently UNKNOWN in the database
-        // (We ignore stagedChanges here as per instructions: "toggles tempKnown for every staged index" -> essentially reverting manual changes before applying "Easy" logic)
-        const unknownWords = Array.from(wordIdsInSentence).filter(id => {
-            const w = words.find(wd => wd.word_id === id);
-            return w && !w.known;
-        });
-
-        // 3. Prepare updates: set all unknown words to KNOWN
-        const updates = unknownWords.map(id => ({ id, known: true }));
-
-        await persistChanges(updates);
+        const unknownIds = new Set(
+            tokens.filter(t => t.lemma && !t.lemma.known).map(t => t.lemma.lemma_id)
+        );
+        await persistChanges([...unknownIds].map(id => ({ id, known: true })));
 
         setSessionStats(prev => ({ 
             reviewed: prev.reviewed + 1, 
@@ -383,13 +338,10 @@ const FlashcardEditor = () => {
                                 </span>
 
                                 <div className="mb-8 w-full">
-                                    <InteractiveSentence 
-                                        sentence={currentCard} 
-                                        words={words} 
-                                        roots={roots} 
-                                        wordInstances={wordInstances}
+                                    <InteractiveSentence
+                                        tokens={tokens}
                                         stagedChanges={stagedChanges}
-                                        toggleWordStage={toggleWordStage}
+                                        toggleLemmaStage={toggleLemmaStage}
                                     />
                                 </div>
 

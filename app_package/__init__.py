@@ -58,8 +58,7 @@ def create_app():
 
             if should_seed:
                 from .database import seed_database
-                from . import sets
-                seed_database([sets.demo])
+                seed_database()
 
         except Exception as e:
             print(f"Database initialization skipped or failed: {e}")

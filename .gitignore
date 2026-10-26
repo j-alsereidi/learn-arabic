@@ -7,8 +7,16 @@ venv/
 __pycache__/
 
 # Database and config files
-instance/
+# instance/demo.db is committed: it is the shared library (sentences, words, lemmas, known status).
+# Final_Lexicon.csv + knownwords.txt stay too, to seed a fresh/production database.
+instance/*
+!instance/demo.db
 app_package/.env
+
+# Lexicon sources
+*.xlsx
+Final_Lexicon.csv
+knownwords.txt
 
 # twilio info
 twilio.txt

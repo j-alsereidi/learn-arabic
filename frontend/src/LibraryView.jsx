@@ -16,8 +16,10 @@ import {
   X,
   CopyPlus,
   HelpCircle,
+  Search,
   Link as LinkIcon
 } from 'lucide-react';
+import Gloss, { formatGloss } from './Gloss';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
@@ -31,19 +33,13 @@ const stripDiacritics = (text) => {
         .replace(/[؟،!.,;:]/g, ''); 
 };
 
-// --- Components ---
+const KnownBadge = ({ known }) => (
+  <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${known ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+    {known ? 'Known' : 'Learning'}
+  </span>
+);
 
-const FrequencyBar = ({ value }) => {
-  const bars = 5;
-  const filledBars = Math.ceil((value / 100) * bars);
-  return (
-    <div className="flex gap-1 items-center" title={`Frequency: ${value}`}>
-      {[...Array(bars)].map((_, i) => (
-        <div key={i} className={`h-4 w-1.5 rounded-sm transition-all ${i < filledBars ? 'bg-indigo-400' : 'bg-slate-700/50'}`} />
-      ))}
-    </div>
-  );
-};
+// --- Components ---
 
 const Tooltip = ({ children, content }) => {
   const [isVisible, setIsVisible] = useState(false);
@@ -82,7 +78,7 @@ const LibraryView = () => {
   // Data State
   const [sentences, setSentences] = useState([]);
   const [words, setWords] = useState([]);
-  const [roots, setRoots] = useState([]);
+  const [lemmas, setLemmas] = useState([]);
   const [wordInstances, setWordInstances] = useState([]);
   
   // UI State
@@ -100,44 +96,56 @@ const LibraryView = () => {
   const [isStaging, setIsStaging] = useState(false);
   const [isProcessingWords, setIsProcessingWords] = useState(false);
   const [stagedWords, setStagedWords] = useState([]);
-  const [newRootsCount, setNewRootsCount] = useState(0); 
-  const [deletedRootsCount, setDeletedRootsCount] = useState(0); 
 
   const [isEditingWord, setIsEditingWord] = useState(false);
-  const [editingWordId, setEditingWordId] = useState(null); 
+  const [editingWordId, setEditingWordId] = useState(null);
   const [editingWord, setEditingWord] = useState("");
-  const [editingRoot, setEditingRoot] = useState("");
+  const [editingLemma, setEditingLemma] = useState("");
   const [editingWordTrans, setEditingWordTrans] = useState("");
-  const [editingRootTrans, setEditingRootTrans] = useState("");
+  const [editingLemmaTrans, setEditingLemmaTrans] = useState("");
   const [isTranslatingWord, setIsTranslatingWord] = useState(false);
 
   const [deleteConfirmSentence, setDeleteConfirmSentence] = useState(false);
   const [deleteConfirmWord, setDeleteConfirmWord] = useState(false);
   const [ambiguityModal, setAmbiguityModal] = useState(null);
 
+  const [lemmaQuery, setLemmaQuery] = useState("");
+  const [lemmaResults, setLemmaResults] = useState([]);
+
   const wordRefs = useRef({});
-  const rootRefs = useRef({});
-  
+
+  // Debounced lexicon search; cleanup drops stale responses when the query changes mid-request
+  useEffect(() => {
+    if (activeTab !== 'lemmas') return;
+    let stale = false;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/lemmas/search?q=${encodeURIComponent(lemmaQuery)}`);
+        const data = await res.json();
+        if (!stale) setLemmaResults(data);
+      } catch (err) {
+        console.error("Error searching lemmas:", err);
+      }
+    }, 250);
+    return () => { stale = true; clearTimeout(timer); };
+  }, [lemmaQuery, activeTab]);
+
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-      const [sentencesRes, wordsRes, rootsRes, instanceRes] = await Promise.all([
+      const [sentencesRes, wordsRes, lemmasRes, instanceRes] = await Promise.all([
         fetch(`${API_BASE}/api/sentences`),
         fetch(`${API_BASE}/api/words`),
-        fetch(`${API_BASE}/api/roots`),
+        fetch(`${API_BASE}/api/lemmas`),
         fetch(`${API_BASE}/api/word-instances`)
       ]);
-      const [sData, wData, rData, iData] = await Promise.all([
-        sentencesRes.json(), wordsRes.json(), rootsRes.json(), instanceRes.json()
+      const [sData, wData, lData, iData] = await Promise.all([
+        sentencesRes.json(), wordsRes.json(), lemmasRes.json(), instanceRes.json()
       ]);
       setSentences(sData);
       setWords(wData);
-      setRoots(rData);
+      setLemmas(lData);
       setWordInstances(iData);
-      
-      if (sData.length > 0) {
-        // Logic handled in effect
-      } 
     } catch (err) {
       console.error("Error fetching data:", err);
       setError("Failed to load data.");
@@ -159,7 +167,8 @@ const LibraryView = () => {
   }, [loading, sentences, selectedSentenceId]);
 
   const selectedSentence = sentences.find(s => s.sentence_id === selectedSentenceId);
-  
+  const lemmaOf = (word) => lemmas.find(l => l.lemma_id === word?.lemma_id);
+
   const sentenceTokens = selectedSentence 
     ? selectedSentence.plaintext.split(' ').map((token, index) => {
         const explicitLink = wordInstances.find(
@@ -172,7 +181,6 @@ const LibraryView = () => {
                     text: token,
                     status: 'linked',
                     wordData: linkedWord,
-                    rootData: roots.find(r => r.root_id === linkedWord.root_id),
                     index
                 };
             }
@@ -185,7 +193,6 @@ const LibraryView = () => {
                 text: token,
                 status: 'exact',
                 wordData: exactMatch,
-                rootData: roots.find(r => r.root_id === exactMatch.root_id),
                 index
             };
         }
@@ -199,7 +206,6 @@ const LibraryView = () => {
                 text: token,
                 status: 'inferred',
                 wordData: match,
-                rootData: roots.find(r => r.root_id === match.root_id),
                 index
             };
         } else if (fuzzyMatches.length > 1) {
@@ -216,7 +222,6 @@ const LibraryView = () => {
             cleanText: cleanToken,
             status: 'missing',
             wordData: null,
-            rootData: null,
             index
         };
       })
@@ -234,20 +239,6 @@ const LibraryView = () => {
         setDeleteConfirmSentence(false); 
     }
   }, [selectedSentenceId, selectedSentence, isEditingSentence]); 
-
-  useEffect(() => {
-    if (newRootsCount > 0) {
-      const timer = setTimeout(() => setNewRootsCount(0), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [newRootsCount]);
-
-  useEffect(() => {
-    if (deletedRootsCount > 0) {
-      const timer = setTimeout(() => setDeletedRootsCount(0), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [deletedRootsCount]);
 
   const handleWordClick = async (token) => {
     const {wordData, text, status, candidates, index} = token;
@@ -268,26 +259,23 @@ const LibraryView = () => {
       setEditingWordId(null);
       setDeleteConfirmWord(false); 
       setEditingWord(stripDiacritics(text));
-      setEditingRoot("");
+      setEditingLemma("");
       setEditingWordTrans("");
-      setEditingRootTrans("");
+      setEditingLemmaTrans("");
 
       setIsTranslatingWord(true);
       try {
         const response = await fetch(`${API_BASE}/suggest-words`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ words: [text] })
+            body: JSON.stringify({ words: [text], sentence: selectedSentence?.plaintext })
         });
-        const suggestions = await response.json();
-        if (suggestions && suggestions.length > 0) {
-            const suggestion = suggestions[0];
-            if (suggestion.plaintext !== "Error") {
-                setEditingWord(suggestion.plaintext); 
-                setEditingWordTrans(suggestion.translation);
-                setEditingRoot(suggestion.root_plaintext);
-                setEditingRootTrans(suggestion.root_translation);
-            }
+        const [suggestion] = await response.json();
+        if (suggestion) {
+            setEditingWord(suggestion.plaintext);
+            setEditingWordTrans(suggestion.translation);
+            setEditingLemma(suggestion.lemma_plaintext);
+            setEditingLemmaTrans(suggestion.lemma_translation);
         }
       } catch (err) {
         console.error("Error fetching suggestions:", err);
@@ -298,13 +286,13 @@ const LibraryView = () => {
   };
 
   const handleTableWordClick = (word) => {
-    const root = roots.find(r => r.root_id === word.root_id);
+    const lemma = lemmaOf(word);
     setIsEditingWord(true);
     setEditingWordId(word.word_id);
     setEditingWord(word.plaintext);
-    setEditingRoot(root ? root.plaintext : "");
+    setEditingLemma(lemma?.plaintext || "");
     setEditingWordTrans(word.translation);
-    setEditingRootTrans(root ? root.translation : "");
+    setEditingLemmaTrans(lemma?.translation || "");
     setDeleteConfirmWord(false); 
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -346,14 +334,14 @@ const LibraryView = () => {
       const wData = await wRes.json();
       if (wData.translatedText) setEditingWordTrans(wData.translatedText);
 
-      if (editingRoot) {
+      if (editingLemma) {
         const rRes = await fetch(`${API_BASE}/translate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ q: editingRoot }),
+          body: JSON.stringify({ q: editingLemma }),
         });
         const rData = await rRes.json();
-        if (rData.translatedText) setEditingRootTrans(rData.translatedText);
+        if (rData.translatedText) setEditingLemmaTrans(rData.translatedText);
       }
     } catch (error) {
       console.error("Translation error:", error);
@@ -363,8 +351,8 @@ const LibraryView = () => {
   };
 
   const handleConfirmWordEditor = async () => {
-    if (!editingWord || !editingRoot) {
-      alert("Please enter both Word and Root.");
+    if (!editingWord || !editingLemma) {
+      alert("Please enter both Word and Lemma.");
       return;
     }
 
@@ -378,8 +366,8 @@ const LibraryView = () => {
             body: JSON.stringify({
                 plaintext: editingWord,
                 translation: editingWordTrans,
-                root_plaintext: editingRoot,
-                root_translation: editingRootTrans
+                lemma_plaintext: editingLemma,
+                lemma_translation: editingLemmaTrans
             })
         });
       } else {
@@ -387,8 +375,8 @@ const LibraryView = () => {
             items: [{
             plaintext: editingWord,
             translation: editingWordTrans,
-            root_plaintext: editingRoot,
-            root_translation: editingRootTrans
+            lemma_plaintext: editingLemma,
+            lemma_translation: editingLemmaTrans
             }]
         };
         response = await fetch(`${API_BASE}/add-words`, {
@@ -400,8 +388,6 @@ const LibraryView = () => {
       if (!response.ok) throw new Error("Server error");
       const result = await response.json();
       if (result.success) {
-        if (result.new_roots_count > 0 || result.new_root_created) setNewRootsCount(prev => prev + 1);
-        if (result.deleted_root) setDeletedRootsCount(prev => prev + 1);
         await fetchData();
         setIsEditingWord(false);
       }
@@ -417,10 +403,10 @@ const LibraryView = () => {
     if (missingWords.length === 0) return;
     setIsProcessingWords(true);
     try {
-      const response = await fetch(`${API_BASE}/suggest-words-isri`, {
+      const response = await fetch(`${API_BASE}/suggest-words`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ words: missingWords })
+        body: JSON.stringify({ words: missingWords, sentence: selectedSentence.plaintext })
       });
       const suggestions = await response.json();
       setStagedWords(suggestions.map(s => ({ ...s, checked: true })));
@@ -455,7 +441,6 @@ const LibraryView = () => {
       if (!response.ok) throw new Error("Server error");
       const result = await response.json();
       if (result.success) {
-        if (result.new_roots_count > 0) setNewRootsCount(result.new_roots_count);
         await fetchData();
         setIsStaging(false);
         setStagedWords([]);
@@ -530,7 +515,6 @@ const LibraryView = () => {
         const response = await fetch(`${API_BASE}/api/delete-word/${editingWordId}`, { method: 'DELETE' });
         const result = await response.json();
         if (result.success) {
-            if (result.deleted_root) setDeletedRootsCount(prev => prev + 1);
             await fetchData();
             setIsEditingWord(false);
             setDeleteConfirmWord(false);
@@ -629,11 +613,11 @@ const LibraryView = () => {
                             >
                                 <div>
                                     <div className="text-xl font-arabic text-white mb-1">{candidate.plaintext}</div>
-                                    <div className="text-sm text-slate-400 group-hover:text-indigo-200">{candidate.translation}</div>
+                                    <div className="text-sm text-slate-400 group-hover:text-indigo-200">{candidate.translation || formatGloss(lemmaOf(candidate)?.translation)}</div>
                                 </div>
                                 <div className="text-right">
-                                    <div className="text-xs text-slate-500 mb-1">Root</div>
-                                    <div className="text-sm font-arabic text-indigo-400">R-{candidate.root_id}</div>
+                                    <div className="text-xs text-slate-500 mb-1">Lemma</div>
+                                    <div className="text-sm font-arabic text-indigo-400">{lemmaOf(candidate)?.plaintext}</div>
                                 </div>
                             </button>
                         ))}
@@ -683,11 +667,11 @@ const LibraryView = () => {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-500 font-bold mb-1 block">ROOT (ARABIC)</label>
+                <label className="text-xs text-slate-500 font-bold mb-1 block">LEMMA (ARABIC)</label>
                 <input 
-                  value={editingRoot} 
-                  onChange={(e) => setEditingRoot(e.target.value)}
-                  placeholder="Enter Root..."
+                  value={editingLemma} 
+                  onChange={(e) => setEditingLemma(e.target.value)}
+                  placeholder="Enter Lemma..."
                   className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-right font-arabic text-xl text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-700"
                 />
               </div>
@@ -715,11 +699,11 @@ const LibraryView = () => {
                 />
               </div>
               <div>
-                <label className="text-xs text-slate-500 font-bold mb-1 block">ROOT TRANSLATION</label>
+                <label className="text-xs text-slate-500 font-bold mb-1 block">LEMMA TRANSLATION</label>
                 <input 
-                  value={editingRootTrans} 
-                  onChange={(e) => setEditingRootTrans(e.target.value)}
-                  placeholder="Root translation..."
+                  value={editingLemmaTrans} 
+                  onChange={(e) => setEditingLemmaTrans(e.target.value)}
+                  placeholder="Lemma translation..."
                   className="w-full bg-slate-950/30 border border-slate-800 text-slate-300 text-lg rounded-lg p-3 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors placeholder:text-slate-600"
                 />
               </div>
@@ -795,7 +779,7 @@ const LibraryView = () => {
     if (!selectedSentence) return null;
 
     if (isEditingWord) {
-      return <WordEditor />;
+      return WordEditor();
     }
 
     return (
@@ -844,8 +828,8 @@ const LibraryView = () => {
                                     {token.status === 'inferred' && "Inferred"}
                                     {token.status === 'exact' && ""} 
                                 </div> {/*Div added for inferred/exact label*/}
-                                <div className="font-bold text-indigo-300 mb-1">{token.rootData?.plaintext || "No Root"}</div>
-                                <div className="text-slate-300">{token.rootData?.translation}</div>
+                                <div className="font-bold text-indigo-300 mb-1">{lemmaOf(token.wordData)?.plaintext || "No Lemma"}</div>
+                                <Gloss text={lemmaOf(token.wordData)?.translation} />
                             </>
                             ) : (
                             <div className="text-rose-400 font-medium flex items-center justify-center gap-1">
@@ -1041,9 +1025,9 @@ const LibraryView = () => {
                 <div className="h-px bg-slate-700/50 w-full" />
 
                 <div>
-                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Root</div>
-                  <div className="text-xl font-arabic text-slate-300 mb-1" dir="rtl">{item.root_plaintext}</div>
-                  <div className="text-sm text-slate-400">{item.root_translation}</div>
+                  <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Lemma</div>
+                  <div className="text-xl font-arabic text-slate-300 mb-1" dir="rtl">{item.lemma_plaintext}</div>
+                  <div className="text-sm text-slate-400">{item.lemma_translation}</div>
                 </div>
               </div>
             </div>
@@ -1056,17 +1040,17 @@ const LibraryView = () => {
   // Render return for LibraryView
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
-      <AmbiguityModal />
+      {AmbiguityModal()}
       
       {/* Editor Section */}
       <section>
-        <SentenceEditor />
+        {SentenceEditor()}
       </section>
 
       {/* Tables Section */}
       <section className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl overflow-hidden flex flex-col h-[600px] relative transition-all">
         {isStaging ? (
-          <StagingArea />
+          StagingArea()
         ) : (
           <>
             {/* Tabs */}
@@ -1074,7 +1058,7 @@ const LibraryView = () => {
               {[
                 { id: 'sentences', label: 'Sentences', icon: Type },
                 { id: 'words', label: 'Words', icon: BookOpen },
-                { id: 'roots', label: 'Roots', icon: Database },
+                { id: 'lemmas', label: 'Lemmas', icon: Database },
               ].map(tab => (
                 <button
                   key={tab.id}
@@ -1088,16 +1072,6 @@ const LibraryView = () => {
                 >
                   <tab.icon className="w-4 h-4" />
                   {tab.label}
-                  {tab.id === 'roots' && newRootsCount > 0 && (
-                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 animate-out fade-out duration-[3000ms]">
-                      +{newRootsCount}
-                    </span>
-                  )}
-                  {tab.id === 'roots' && deletedRootsCount > 0 && (
-                    <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400 animate-out fade-out duration-[3000ms]">
-                      -{deletedRootsCount}
-                    </span>
-                  )}
                   {activeTab === tab.id && (
                     <div className="absolute bottom-0 left-0 w-full h-0.5 bg-indigo-500 shadow-[0_-2px_8px_rgba(99,102,241,0.5)]"></div>
                   )}
@@ -1156,7 +1130,7 @@ const LibraryView = () => {
                     <table className="w-full text-left border-collapse">
                       <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
                         <tr>
-                          {['ID', 'Root ID', 'Plaintext', 'Translation', 'Freq', 'Known'].map(h => (
+                          {['ID', 'Lemma', 'Plaintext', 'Translation', 'Known'].map(h => (
                             <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
                           ))}
                         </tr>
@@ -1173,37 +1147,46 @@ const LibraryView = () => {
                             `}
                           >
                             <td className="p-4 text-sm font-mono text-slate-500">#{w.word_id}</td>
-                            <td className="p-4 text-sm font-mono text-indigo-400">R-{w.root_id}</td>
+                            <td className="p-4 text-lg font-arabic text-indigo-400" dir="rtl">{lemmaOf(w)?.plaintext}</td>
                             <td className="p-4 text-lg font-arabic text-slate-200" dir="rtl">{w.plaintext}</td>
-                            <td className="p-4 text-sm text-slate-300">{w.translation}</td>
-                            <td className="p-4 text-sm text-slate-400"><FrequencyBar value={w.frequency} /></td>
-                            <td className="p-4 text-sm">
-                              <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${w.known ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
-                                {w.known ? 'Known' : 'Learning'}
-                              </span>
-                            </td>
+                            <td className="p-4 text-sm text-slate-300">{w.translation || formatGloss(lemmaOf(w)?.translation)}</td>
+                            <td className="p-4 text-sm"><KnownBadge known={lemmaOf(w)?.known} /></td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   )}
 
-                  {/* Roots Table */}
-                  {activeTab === 'roots' && (
+                  {/* Lemmas Table (search over the whole lexicon) */}
+                  {activeTab === 'lemmas' && (
                     <table className="w-full text-left border-collapse">
                       <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
                         <tr>
-                          {['ID', 'Root', 'Translation'].map(h => (
+                          <th colSpan={4} className="p-3 border-b border-slate-800">
+                            <div className="relative">
+                              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                              <input
+                                value={lemmaQuery}
+                                onChange={(e) => setLemmaQuery(e.target.value)}
+                                placeholder="Search by ID, Arabic, Buckwalter or English..."
+                                className="w-full bg-slate-900 border border-slate-700 rounded-lg py-2 pl-9 pr-3 text-sm font-normal text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-600"
+                              />
+                            </div>
+                          </th>
+                        </tr>
+                        <tr>
+                          {['ID', 'Lemma', 'Translation', 'Known'].map(h => (
                             <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/50">
-                        {roots.sort((a, b) => a.root_id - b.root_id).map(r => (
-                          <tr key={r.root_id} ref={el => rootRefs.current[r.root_id] = el} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                            <td className="p-4 text-sm font-mono text-slate-500">#{r.root_id}</td>
-                            <td className="p-4 text-xl font-arabic text-indigo-400" dir="rtl">{r.plaintext}</td>
-                            <td className="p-4 text-sm text-slate-300">{r.translation}</td>
+                        {lemmaResults.map(l => (
+                          <tr key={l.lemma_id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                            <td className="p-4 text-sm font-mono text-slate-500">#{l.lemma_id}</td>
+                            <td className="p-4 text-xl font-arabic text-indigo-400" dir="rtl">{l.plaintext}</td>
+                            <td className="p-4 text-sm text-slate-300">{formatGloss(l.translation)}</td>
+                            <td className="p-4 text-sm"><KnownBadge known={l.known} /></td>
                           </tr>
                         ))}
                       </tbody>
