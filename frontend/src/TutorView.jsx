@@ -41,8 +41,8 @@ const TutorMessage = ({ message, known, onToggle }) => {
       <div className="bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-sm px-5 py-3">
         <InteractiveSentence
           tokens={message.tokens}
-          stagedChanges={known}
-          toggleLemmaStage={onToggle}
+          known={known}
+          onToggle={onToggle}
           className="gap-x-1.5 text-2xl"
         />
         {showEnglish && <p className="mt-2 pt-2 border-t border-slate-800 text-sm text-slate-400">{message.english}</p>}

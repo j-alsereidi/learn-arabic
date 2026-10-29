@@ -42,20 +42,20 @@ const sentenceLemmas = (sentence, words, lemmas, wordInstances) =>
     });
 
 // --- Sub-Components ---
-export const InteractiveSentence = ({ tokens, stagedChanges, toggleLemmaStage, className = "justify-center gap-3 text-3xl md:text-4xl" }) => {
+export const InteractiveSentence = ({ tokens, known = {}, onToggle, className = "justify-center gap-3 text-3xl md:text-4xl" }) => {
     return (
         <div className={`flex flex-wrap leading-relaxed font-arabic ${className}`} dir="rtl">
             {tokens.map((t, idx) => {
-                // Staged changes win over the database state; a missing key means untouched.
+                // `known` overrides the lemma's loaded state (the tutor's toggles); a missing key means untouched
                 const lemmaId = t.lemma?.lemma_id;
-                const isKnown = stagedChanges[lemmaId] ?? t.lemma?.known ?? false;
+                const isKnown = known[lemmaId] ?? t.lemma?.known ?? false;
 
                 return (
                     <div key={idx} className="relative inline-block group">
                         <span
                             onClick={(e) => {
                                 e.stopPropagation();
-                                if (t.lemma) toggleLemmaStage(lemmaId, isKnown);
+                                if (t.lemma) onToggle(lemmaId, isKnown);
                             }}
                             className={`
                                 relative px-1 cursor-pointer transition-all duration-300 select-none
@@ -106,11 +106,6 @@ const FlashcardEditor = () => {
     const [lemmas, setLemmas] = useState([]);
     const [wordInstances, setWordInstances] = useState([]);
 
-    // Stores manual toggles for the CURRENT card only.
-    // Structure: { [lemmaId]: boolean }
-    // If a key is missing, it means it hasn't been touched (use DB state).
-    const [stagedChanges, setStagedChanges] = useState({});
-
     useEffect(() => {
         const fetchCards = async () => {
             try {
@@ -141,26 +136,24 @@ const FlashcardEditor = () => {
         fetchCards();
     }, []);
 
-    // Reset staged changes when card index changes
     useEffect(() => {
-        setStagedChanges({});
         setIsFlipped(false);
     }, [currentIndex]);
 
     const tokens = cards[currentIndex] ? sentenceLemmas(cards[currentIndex], words, lemmas, wordInstances) : [];
 
-    const toggleLemmaStage = (lemmaId, currentKnownStatus) => {
-        setStagedChanges(prev => ({
-            ...prev,
-            [lemmaId]: !currentKnownStatus
-        }));
-    };
-
+    // Saved as soon as it's made, so it survives navigating, leaving and coming back
     const persistChanges = async (updates) => {
         // updates is an array of { id, known }
         if (updates.length === 0) return;
 
-        // 1. Update Backend
+        // 1. Update Frontend State (Lemmas) first, so the color changes without waiting
+        setLemmas(prev => prev.map(l => {
+            const update = updates.find(u => u.id === l.lemma_id);
+            return update ? { ...l, known: update.known } : l;
+        }));
+
+        // 2. Update Backend
         await Promise.all(
             updates.map(({ id, known }) =>
                 fetch(`${API_BASE}/api/set-known/${id}`, {
@@ -170,13 +163,9 @@ const FlashcardEditor = () => {
                 }).catch(err => console.error(`Failed to save lemma ${id}:`, err))
             )
         );
-
-        // 2. Update Frontend State (Lemmas)
-        setLemmas(prev => prev.map(l => {
-            const update = updates.find(u => u.id === l.lemma_id);
-            return update ? { ...l, known: update.known } : l;
-        }));
     };
+
+    const toggleKnown = (lemmaId, isKnown) => persistChanges([{ id: lemmaId, known: !isKnown }]);
 
     const changeCard = (direction) => {
         if (isAnimating || cards.length === 0) return;
@@ -184,7 +173,6 @@ const FlashcardEditor = () => {
         setSlideDirection(direction === 'next' ? 'next-out' : 'prev-out');
 
         setTimeout(() => {
-            // NOTE: We do NOT save on simple navigation (Prev/Next), we just reset.
             setCurrentIndex(prev =>
                 direction === 'next'
                     ? (prev + 1) % cards.length
@@ -207,20 +195,13 @@ const FlashcardEditor = () => {
 
     // --- Button Logic ---
 
-    // HARD: Submit only what was manually staged
-    const handleHard = async () => {
-        const changesToSubmit = Object.entries(stagedChanges).map(([idStr, val]) => ({
-            id: Number(idStr),
-            known: val
-        }));
-
-        await persistChanges(changesToSubmit);
-        
+    // HARD: word toggles are already saved, so just move on
+    const handleHard = () => {
         setSessionStats(prev => ({ ...prev, reviewed: prev.reviewed + 1 }));
         changeCard('next');
     };
 
-    // EASY: Ignore staged changes, mark every unknown lemma in the sentence known.
+    // EASY: mark every unknown lemma in the sentence known
     const handleEasy = async () => {
         const unknownIds = new Set(
             tokens.filter(t => t.lemma && !t.lemma.known).map(t => t.lemma.lemma_id)
@@ -340,8 +321,7 @@ const FlashcardEditor = () => {
                                 <div className="mb-8 w-full">
                                     <InteractiveSentence
                                         tokens={tokens}
-                                        stagedChanges={stagedChanges}
-                                        toggleLemmaStage={toggleLemmaStage}
+                                        onToggle={toggleKnown}
                                     />
                                 </div>
 
