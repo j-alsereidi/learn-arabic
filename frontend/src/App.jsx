@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import LibraryView from './LibraryView';
 import FlashcardEditor from './FlashcardEditor';
 import TutorView from './TutorView';
@@ -11,6 +11,8 @@ import {
 
 const App = () => {
   const [currentView, setCurrentView] = useState('library');
+  const tutorOpened = useRef(false);
+  if (currentView === 'tutor') tutorOpened.current = true;
 
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-indigo-500/30">
@@ -73,7 +75,10 @@ const App = () => {
         <div className="max-w-7xl mx-auto h-full">
           {currentView === 'library' && <LibraryView />}
           {currentView === 'flashcards' && <FlashcardEditor />}
-          {currentView === 'tutor' && <TutorView />}
+          {/* Kept mounted after the first visit so the chat survives switching views */}
+          {tutorOpened.current && (
+            <div className={currentView === 'tutor' ? '' : 'hidden'}><TutorView /></div>
+          )}
         </div>
       </main>
 

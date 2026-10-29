@@ -2,7 +2,6 @@ from flask import Blueprint, jsonify, request, Response
 from .models import Sentence, Word, Lemma, WordInstance, nfc, prune, bare, find_lemma, new_lemma
 from .extensions import db
 from deep_translator import GoogleTranslator
-from .communications import openai_response, gemini_response
 import json
 import re
 import string
@@ -424,68 +423,9 @@ def set_known(lemma_id):
     try:
         lemma = Lemma.query.get_or_404(lemma_id)
         lemma.known = bool(request.get_json()['known'])
+        lemma.source = 'user'
         db.session.commit()
         return jsonify({'success': True, 'known': lemma.known})
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
-
-
-# =========================
-# Constrained LLM PoC
-# =========================
-@main.route('/api/llm/openai', methods=['POST'])
-def api_llm_openai():
-    """
-    Generates a sentence using ChatGPT with constraints on allowed words.
-    Input:
-      {
-        "known_words": ["انا","طالب","في","جامعة"],
-        "max_allowed_words_used": 8
-      }
-    Output:
-      {
-        "text": "...",
-        "tokens": [...],
-        "used_new_word": true/false,
-        "violations": [...]
-      }
-    """
-    data = request.get_json(silent=True) or {}
-
-    known_words = data.get('known_words', [])
-    result = openai_response(
-        known_words=known_words,
-        #max_allowed_words_used=8,
-    )
-
-    # PoC: always return 200 (even if violations exist) so frontend can display errors nicely
-    return jsonify(result), 200
-
-@main.route('/api/llm/gemini', methods=['POST'])
-def api_llm_gemini():
-    """
-    Generates a sentence using Gemini with constraints on allowed words.
-    Input:
-      {
-        "known_words": ["انا","طالب","في","جامعة"],
-        "max_allowed_words_used": 8
-      }
-    Output:
-      {
-        "text": "...",
-        "tokens": [...],
-        "used_new_word": true/false,
-        "violations": [...]
-      }
-    """
-    data = request.get_json(silent=True) or {}
-
-    known_words = data.get('known_words', [])
-    result = gemini_response(
-        known_words=known_words,
-        #max_allowed_words_used=8,
-    )
-
-    # PoC: always return 200 (even if violations exist) so frontend can display errors nicely
-    return jsonify(result), 200

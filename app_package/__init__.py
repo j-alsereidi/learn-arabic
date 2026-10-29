@@ -46,7 +46,11 @@ def create_app():
 
     # Import and Register Blueprints
     from .routes import main
+    from .tutor import tutor
+    from .calibrate import calibrate
     app.register_blueprint(main)
+    app.register_blueprint(tutor)
+    app.register_blueprint(calibrate)
 
     # Initialize Database logic
     with app.app_context():

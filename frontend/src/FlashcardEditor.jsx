@@ -42,9 +42,9 @@ const sentenceLemmas = (sentence, words, lemmas, wordInstances) =>
     });
 
 // --- Sub-Components ---
-const InteractiveSentence = ({ tokens, stagedChanges, toggleLemmaStage }) => {
+export const InteractiveSentence = ({ tokens, stagedChanges, toggleLemmaStage, className = "justify-center gap-3 text-3xl md:text-4xl" }) => {
     return (
-        <div className="flex flex-wrap justify-center gap-3 text-3xl md:text-4xl leading-relaxed font-arabic" dir="rtl">
+        <div className={`flex flex-wrap leading-relaxed font-arabic ${className}`} dir="rtl">
             {tokens.map((t, idx) => {
                 // Staged changes win over the database state; a missing key means untouched.
                 const lemmaId = t.lemma?.lemma_id;

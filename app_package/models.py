@@ -10,6 +10,7 @@ class Lemma(db.Model):
     translation = db.Column(db.String)
     occurrences = db.Column(db.Integer, default=0)
     known = db.Column(db.Boolean, default=False)
+    source = db.Column(db.String)  # how `known` was set: None (default/import), 'user' (judged by the learner) or 'inferred' (calibration)
     words = db.relationship('Word', backref='lemma', lazy=True)
 
 class Word(db.Model):
@@ -27,6 +28,17 @@ class Sentence(db.Model):
     translation = db.Column(db.String)
     complete = db.Column(db.Boolean, default=False)
     length = db.Column(db.Integer)
+
+class CalibrationStep(db.Model):
+    """One submitted calibration page, kept so it can be viewed and re-judged later."""
+    __tablename__ = 'calibration_step'
+    step_id = db.Column(db.Integer, primary_key=True)
+    stratum = db.Column(db.Integer)
+    mode = db.Column(db.String)
+    manual = db.Column(db.Boolean)  # part of a hand sweep
+    ids = db.Column(db.JSON)  # lemma ids in display order
+    unknown = db.Column(db.JSON)
+    before = db.Column(db.JSON)  # {lemma_id: [known, source]} of the lemmas this page inferred, before it did
 
 class WordInstance(db.Model):
     __tablename__ = 'word_instance'

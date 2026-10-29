@@ -17,9 +17,11 @@ import {
   CopyPlus,
   HelpCircle,
   Search,
+  Gauge,
   Link as LinkIcon
 } from 'lucide-react';
 import Gloss, { formatGloss } from './Gloss';
+import CalibrateView from './CalibrateView';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
@@ -109,6 +111,7 @@ const LibraryView = () => {
   const [deleteConfirmWord, setDeleteConfirmWord] = useState(false);
   const [ambiguityModal, setAmbiguityModal] = useState(null);
 
+  const [isCalibrating, setIsCalibrating] = useState(false);
   const [lemmaQuery, setLemmaQuery] = useState("");
   const [lemmaResults, setLemmaResults] = useState([]);
 
@@ -1038,10 +1041,24 @@ const LibraryView = () => {
   );
 
   // Render return for LibraryView
+  if (isCalibrating) {
+    return <CalibrateView onClose={() => { setIsCalibrating(false); fetchData(); }} />;
+  }
+
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
       {AmbiguityModal()}
-      
+
+      <div className="flex justify-end -mb-4">
+        <button
+          onClick={() => setIsCalibrating(true)}
+          className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
+        >
+          <Gauge className="w-4 h-4" />
+          Calibrate
+        </button>
+      </div>
+
       {/* Editor Section */}
       <section>
         {SentenceEditor()}
