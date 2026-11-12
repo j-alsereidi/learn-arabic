@@ -11,6 +11,13 @@ class Lemma(db.Model):
     occurrences = db.Column(db.Integer, default=0)
     known = db.Column(db.Boolean, default=False)
     source = db.Column(db.String)  # how `known` was set: None (default/import), 'user' (judged by the learner) or 'inferred' (calibration)
+    # Spaced repetition (srs.py): all None until the word is first studied
+    p_learned = db.Column(db.Float)  # L, the probability it's learned
+    stability = db.Column(db.Float)  # S, days until recall falls to 90%
+    last_review = db.Column(db.DateTime)  # UTC
+    due = db.Column(db.DateTime)  # UTC
+    reps = db.Column(db.Integer, default=0)
+    lapses = db.Column(db.Integer, default=0)
     words = db.relationship('Word', backref='lemma', lazy=True)
 
 class Word(db.Model):
@@ -28,6 +35,7 @@ class Sentence(db.Model):
     translation = db.Column(db.String)
     complete = db.Column(db.Boolean, default=False)
     length = db.Column(db.Integer)
+    diac = db.Column(db.String)  # plaintext with diacritics, token for token (flashcards; filled on first use)
 
 class CalibrationStep(db.Model):
     """One submitted calibration page, kept so it can be viewed and re-judged later."""
@@ -39,6 +47,39 @@ class CalibrationStep(db.Model):
     ids = db.Column(db.JSON)  # lemma ids in display order
     unknown = db.Column(db.JSON)
     before = db.Column(db.JSON)  # {lemma_id: [known, source]} of the lemmas this page inferred, before it did
+
+class TatoebaSentence(db.Model):
+    """Tatoeba sentence (CC BY 2.0 FR) with its English translation, lemmatized once by tatoeba_import."""
+    __bind_key__ = 'static'  # data/static.db
+    __tablename__ = 'tatoeba'
+    tatoeba_id = db.Column(db.Integer, primary_key=True)
+    ar = db.Column(db.String, nullable=False)
+    en = db.Column(db.String)
+    tokens = db.Column(db.JSON)  # [[word as Camelira tokenized it, lemma_id or null], ...]
+    lemmas = db.Column(db.JSON)  # distinct lemma ids in the sentence
+    unresolved = db.Column(db.Integer, default=0)  # Arabic words with no lexicon lemma (names etc.): never i+1
+
+class TatoebaDiac(db.Model):
+    """A Tatoeba sentence with diacritics, token for token, cached on first use (here, not in data/static.db,
+    which nothing writes at runtime)."""
+    __tablename__ = 'tatoeba_diac'
+    tatoeba_id = db.Column(db.Integer, primary_key=True)
+    diac = db.Column(db.String)
+
+class Review(db.Model):
+    """One word judged in a flashcard review: the log the heatmap counts and the model could be refitted from."""
+    __tablename__ = 'review'
+    review_id = db.Column(db.Integer, primary_key=True)
+    at = db.Column(db.DateTime, index=True)  # UTC
+    lemma_id = db.Column(db.Integer, db.ForeignKey('lemma.lemma_id'))
+    sentence_id = db.Column(db.Integer)
+    role = db.Column(db.String)  # 'intro' (first sight), 'target' (the card's word) or 'context'
+    ok = db.Column(db.Boolean)
+
+class Setting(db.Model):
+    __tablename__ = 'setting'
+    key = db.Column(db.String, primary_key=True)
+    value = db.Column(db.String)
 
 class WordInstance(db.Model):
     __tablename__ = 'word_instance'

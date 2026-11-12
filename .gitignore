@@ -6,11 +6,9 @@ venv/
 *.pyc
 __pycache__/
 
-# Database and config files
-# instance/demo.db is committed: it is the shared library (sentences, words, lemmas, known status).
-# Final_Lexicon.csv + knownwords.txt stay too, to seed a fresh/production database.
-instance/*
-!instance/demo.db
+# Databases: data/static.db (Tatoeba sentences) and data/example_user.db (example user data, which a fresh
+# clone starts from) are committed. Your own data is instance/user.db, which stays out of git.
+instance/
 app_package/.env
 
 # Lexicon sources
@@ -20,3 +18,5 @@ knownwords.txt
 
 # twilio info
 twilio.txt
+# Interface design demos (local only)
+design-concepts/

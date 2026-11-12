@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { X, ArrowRight, ArrowLeft, Check, ListX, CheckCircle2, Loader, Download, Upload, RotateCcw } from 'lucide-react';
+import { ArrowRight, ArrowLeft, Check, ListX, CheckCircle2, Loader, Download, Upload, RotateCcw, X } from 'lucide-react';
 import { formatGloss } from './Gloss';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
@@ -100,9 +100,7 @@ const CalibrateView = ({ onClose }) => {
     return () => { window.removeEventListener('mouseup', stop); window.removeEventListener('keydown', onKey); };
   });
 
-  if (!page) {
-    return <div className="flex justify-center p-16 text-indigo-400"><Loader className="w-8 h-8 animate-spin" /></div>;
-  }
+  if (!page) return null;  // the page is quick to load: a spinner swapping for the grid looked like a zoom
 
   const allUnknown = page.lemmas.length > 0 && unknown.size === page.lemmas.length;
   const saved = new Set(page.unknown);
@@ -111,21 +109,21 @@ const CalibrateView = ({ onClose }) => {
   const iconButton = 'p-3 rounded-xl border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-30 disabled:hover:bg-transparent';
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-300 select-none">
+    <div className="space-y-8 select-none">
       <div className="flex items-center gap-4">
         <div className="flex-1 flex gap-1">
           {page.strata.map((s, i) => (
             <button
               key={i}
-              onClick={() => { sweeping.current = i; loadNext(); }}
+              // a stratum with words left to judge is swept; a fully swept one opens at its first saved page
+              onClick={() => { if (s.open) { sweeping.current = i; loadNext(); } else if (s.step != null) request(`/api/calibrate/steps/${s.step}`); }}
               title={`${s.lo}–${s.hi}`}
-              aria-label={`Sweep ranks ${s.lo} to ${s.hi}`}
+              aria-label={`Ranks ${s.lo} to ${s.hi}`}
               className="flex-1 py-2 group"
             >
-              <div className={`h-2.5 rounded-full bg-slate-800 overflow-hidden flex group-hover:bg-slate-700 transition-colors
+              <div className={`h-2.5 rounded-full bg-rose-500/60 overflow-hidden flex group-hover:opacity-80 transition-opacity
                 ${i === page.stratum && page.mode !== 'done' ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-950' : ''}`}>
                 <div className="h-full bg-emerald-500/70" style={{ width: `${(100 * s.known) / s.size}%` }} />
-                <div className="h-full bg-rose-500/60" style={{ width: `${(100 * s.unknown) / s.size}%` }} />
               </div>
             </button>
           ))}

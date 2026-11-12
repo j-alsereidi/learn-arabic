@@ -8,14 +8,15 @@ attempt is what reaches the learner.
 """
 import json
 import os
+import random
 import re
 import urllib.error
 import urllib.request
 from dotenv import load_dotenv
 from flask import Blueprint, jsonify, request
 from .extensions import db
-from .models import Lemma, Word, Sentence, WordInstance, prune, find_lemma
-from .routes import lemmatize, clean_punctuation, lemma_json, update_sentence_completeness
+from .models import Lemma, find_lemma
+from .routes import lemmatize, clean_punctuation, lemma_json, save_card
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 
@@ -44,7 +45,14 @@ KNOWN: {known}
 NEW (lemma: meaning): {new}"""
 
 OPENING_PROMPT = """Start a new conversation. Invent a short everyday scenario or roleplay for the learner, chosen so one NEW lemma fits naturally, and open it in character.
-Reply with a JSON object: {"scenario": "<one English sentence setting the scene, addressed to the learner, e.g. You're in a coffee shop and a stranger sits at your table.>", "arabic": "<your opening line>", "english": "<translation>"}"""
+For variety, set it here unless that makes it awkward: {setting}.
+Reply with a JSON object: {"scenario": "<one English sentence setting the scene, addressed to the learner>", "arabic": "<your opening line>", "english": "<translation>"}"""
+
+# A different place each chat: one fixed example made every conversation drift to the same café (and its tea)
+SETTINGS = ['a bus stop', 'a library', "a doctor's waiting room", 'a phone call with a relative', 'a market', 'a classroom',
+            'an airport', 'a train station', 'a park', 'an office', 'a hotel reception', 'a pharmacy', 'a football match',
+            'a kitchen at home', 'a bookshop', 'a walk through the old town', 'a car repair shop', 'a museum', 'a wedding',
+            'a beach', 'a job interview', 'a taxi', 'a neighbour at the door', 'a mosque courtyard after prayer']
 
 def ask_llm(messages):
     gemini_key = os.getenv('GEMINI_API_KEY', '')
@@ -96,8 +104,10 @@ def tutor_reply():
     data = request.get_json()
     history = data.get('messages', [])
 
-    known = {l.plaintext for l in Lemma.query.filter_by(known=True)}
-    candidates = Lemma.query.filter_by(known=False).order_by(Lemma.lemma_id).limit(NEW_WORD_CHOICES).all()
+    # Words you're learning in Flashcards count as known, as in the Atlas
+    known = {l.plaintext for l in Lemma.query.filter(Lemma.known | Lemma.p_learned.isnot(None))}
+    candidates = (Lemma.query.filter(~Lemma.known, Lemma.p_learned.is_(None))
+                  .order_by(Lemma.lemma_id).limit(NEW_WORD_CHOICES).all())
     new = {l.plaintext for l in candidates}
     new_list = '; '.join(f"{l.plaintext}: {(l.translation or '').split('#')[0].replace('_', ' ')}" for l in candidates)
 
@@ -111,7 +121,7 @@ def tutor_reply():
         else:
             messages.append({'role': 'user', 'content': m['text']})
     if not history:
-        messages.append({'role': 'user', 'content': OPENING_PROMPT})
+        messages.append({'role': 'user', 'content': OPENING_PROMPT.replace('{setting}', random.choice(SETTINGS))})
 
     try:
         best = None
@@ -145,22 +155,7 @@ def tutor_flashcard():
     """Saves a tutor message as a sentence, linking each token to the lemma the tutor's analysis found."""
     data = request.get_json()
     try:
-        sentence = Sentence(plaintext=data['arabic'], translation=data['english'], length=len(data['arabic'].split()))
-        db.session.add(sentence)
-        db.session.flush()
-        for index, token in enumerate(data['tokens']):
-            text = clean_punctuation(token['text'])
-            lemma_id = (token.get('lemma') or {}).get('lemma_id')
-            if not text or not lemma_id:
-                continue
-            word = Word.query.filter_by(plaintext=text, lemma_id=lemma_id).first()
-            if not word:
-                word = Word(plaintext=text, lemma_id=lemma_id, prune=prune(text))
-                db.session.add(word)
-                db.session.flush()
-            db.session.add(WordInstance(sentence_id=sentence.sentence_id, word_id=word.word_id, index=index))
-        db.session.flush()
-        update_sentence_completeness(sentence)
+        sentence = save_card(data['arabic'], data['english'], [(t.get('lemma') or {}).get('lemma_id') for t in data['tokens']])
         db.session.commit()
         return jsonify({'success': True, 'sentence_id': sentence.sentence_id})
     except Exception as e:

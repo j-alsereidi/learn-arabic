@@ -76,17 +76,22 @@ def page_json(chosen=None, step=None):
         if mode == 'done' and manual:  # hand sweep finished: back to the automatic flow
             (stratum, mode, ids), manual = next_page(groups), False
     lemmas = {l.lemma_id: l for l in Lemma.query.filter(Lemma.lemma_id.in_(ids))}
+    steps = db.session.query(CalibrationStep.step_id, CalibrationStep.stratum).order_by(CalibrationStep.step_id).all()
+    first_step = {}
+    for step_id, s in steps:
+        first_step.setdefault(s, step_id)
     return jsonify({
         'step_id': step.step_id if step else None,  # None: the next page, not yet submitted
-        'steps': [i for (i,) in db.session.query(CalibrationStep.step_id).order_by(CalibrationStep.step_id)],
+        'steps': [i for i, _ in steps],
         'stratum': stratum,
         'mode': mode,
         'manual': manual,
         'unknown': unknown,  # as saved, for a submitted page
         'lemmas': [lemma_json(lemmas[i]) for i in ids],
+        # open: has words not judged by you, so it can be swept; step: its first saved page, to browse a swept one
         'strata': [{'lo': lo, 'hi': hi, 'size': len(g), 'known': sum(1 for r in g if r[1]),
-                    'unknown': sum(1 for r in g if r[2] and not r[1])}  # judged unknown
-                   for (lo, hi), g in zip(bounds, groups)],
+                    'open': any(r[2] != 'user' for r in g), 'step': first_step.get(i)}
+                   for i, ((lo, hi), g) in enumerate(zip(bounds, groups))],
     })
 
 def judge(ids, unknown):

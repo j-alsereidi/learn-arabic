@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { SquarePen, SendHorizontal, Copy, Check, Languages, BookmarkPlus, RotateCw } from 'lucide-react';
-import { InteractiveSentence } from './FlashcardEditor';
+import { SquarePen, SendHorizontal, Copy, Check, Languages, BookmarkPlus, RotateCw, Loader, SquareArrowOutUpRight } from 'lucide-react';
+import { InteractiveSentence } from './InteractiveSentence';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
@@ -16,10 +16,10 @@ const IconButton = ({ label, onClick, disabled, children }) => (
   </button>
 );
 
-const TutorMessage = ({ message, known, onToggle }) => {
+const TutorMessage = ({ message, known, onToggle, onViewSentence }) => {
   const [showEnglish, setShowEnglish] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [savedId, setSavedId] = useState(null); // the new flashcard's sentence, once saved
 
   const copy = async () => {
     await navigator.clipboard.writeText(message.arabic);
@@ -33,7 +33,7 @@ const TutorMessage = ({ message, known, onToggle }) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(message)
     });
-    if (res.ok) setSaved(true);
+    if (res.ok) setSavedId((await res.json()).sentence_id);
   };
 
   return (
@@ -54,15 +54,17 @@ const TutorMessage = ({ message, known, onToggle }) => {
         <IconButton label="Copy" onClick={copy}>
           {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
         </IconButton>
-        <IconButton label="Save as flashcard" onClick={saveFlashcard} disabled={saved}>
-          {saved ? <Check className="w-4 h-4 text-emerald-400" /> : <BookmarkPlus className="w-4 h-4" />}
-        </IconButton>
+        {savedId
+          ? <IconButton label="View flashcard" onClick={() => onViewSentence?.(savedId)}><SquareArrowOutUpRight className="w-4 h-4 text-emerald-400" /></IconButton>
+          : <IconButton label="Save as flashcard" onClick={saveFlashcard}><BookmarkPlus className="w-4 h-4" /></IconButton>}
       </div>
     </div>
   );
 };
 
-const TutorView = () => {
+// onReply: called whenever a tutor message arrives (the app highlights the Tutor tab if you're elsewhere)
+// onViewSentence: open a saved flashcard in the Library
+const TutorView = ({ onReply, onViewSentence }) => {
   const [scenario, setScenario] = useState('');
   const [messages, setMessages] = useState([]); // {role: 'tutor', arabic, english, tokens} | {role: 'user', text}
   const [known, setKnown] = useState({}); // lemma_id -> known, for toggles made in this chat
@@ -91,6 +93,7 @@ const TutorView = () => {
       if (!res.ok) throw new Error(data.error);
       setScenario(data.scenario);
       setMessages([...history, { role: 'tutor', arabic: data.arabic, english: data.english, tokens: data.tokens }]);
+      onReply?.();
     } catch (err) {
       if (chat === chatRef.current) setError(err.message || 'Error');
     } finally {
@@ -131,7 +134,7 @@ const TutorView = () => {
   };
 
   return (
-    <div className="h-[calc(100vh-4rem)] max-w-3xl mx-auto flex flex-col animate-in fade-in duration-300">
+    <div className="h-[calc(100dvh-7rem)] md:h-[calc(100vh-4rem)] max-w-3xl mx-auto flex flex-col">
       <div className="flex items-center gap-4 pb-4 border-b border-slate-800">
         <p className="flex-1 text-sm italic text-slate-400 min-h-[1.25rem]">{scenario}</p>
         <IconButton label="New chat" onClick={() => setChatId(id => id + 1)}>
@@ -141,14 +144,20 @@ const TutorView = () => {
 
       <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-4 pt-16 pb-4 pr-2">
         {messages.map((m, i) => m.role === 'tutor'
-          ? <TutorMessage key={i} message={m} known={known} onToggle={toggleKnown} />
+          ? <TutorMessage key={i} message={m} known={known} onToggle={toggleKnown} onViewSentence={onViewSentence} />
           : (
             <div key={i} dir="auto" className="self-end max-w-[85%] bg-indigo-600 text-white font-arabic text-xl rounded-2xl rounded-tr-sm px-5 py-3">
               {m.text}
             </div>
           )
         )}
-        {waiting && (
+        {waiting && messages.length === 0 && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center text-slate-400">
+            <Loader className="w-7 h-7 animate-spin text-indigo-400" />
+            <p className="whitespace-pre-line leading-relaxed">{'Loading a new conversation.\nThis might take a minute.'}</p>
+          </div>
+        )}
+        {waiting && messages.length > 0 && (
           <div className="flex gap-1 bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-sm px-5 py-4 w-fit">
             {[0, 150, 300].map(delay => (
               <span key={delay} className="w-2 h-2 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: `${delay}ms` }} />

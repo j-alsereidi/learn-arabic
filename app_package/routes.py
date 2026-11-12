@@ -2,16 +2,47 @@ from flask import Blueprint, jsonify, request, Response
 from .models import Sentence, Word, Lemma, WordInstance, nfc, prune, bare, find_lemma, new_lemma
 from .extensions import db
 from deep_translator import GoogleTranslator
+from deep_translator.exceptions import TooManyRequests
 import json
+import os
 import re
 import string
+import time
 import urllib.request
+import requests
 
 main = Blueprint('main', __name__)
 
 CAMELIRA_URL = 'https://camelira.abudhabi.nyu.edu/api/disambig'
 
 # --- HELPER FUNCTIONS ---
+
+# Arabic -> English. Google first (deep-translator scrapes its free web page, no key); when Google refuses,
+# e.g. by rate-limiting this machine (HTTP 429), DeepL's free API, with DEEPL_API_KEY in app_package/.env.
+GOOGLE_PAUSE = 600  # seconds to skip Google after it rate-limits us, so each request doesn't wait on a refusal
+_google_paused_until = 0.0
+
+def deepl(text):
+    key = os.getenv('DEEPL_API_KEY')
+    if not key:
+        raise RuntimeError('Google Translate is refusing requests and no DEEPL_API_KEY is set in app_package/.env')
+    res = requests.post('https://api-free.deepl.com/v2/translate', timeout=20,
+                        headers={'Authorization': f'DeepL-Auth-Key {key}'},
+                        json={'text': [text], 'source_lang': 'AR', 'target_lang': 'EN-US'})
+    res.raise_for_status()
+    return res.json()['translations'][0]['text']
+
+def translate(text):
+    global _google_paused_until
+    if time.time() >= _google_paused_until:
+        try:
+            return GoogleTranslator(source='ar', target='en').translate(text)
+        except TooManyRequests:
+            _google_paused_until = time.time() + GOOGLE_PAUSE
+            print('Google Translate is rate-limiting this machine: using DeepL for the next 10 minutes')
+        except Exception as e:
+            print(f'Google Translate failed ({e}): trying DeepL')
+    return deepl(text)
 
 def clean_punctuation(text):
     """Strips Arabic and English punctuation for cleaner matching."""
@@ -66,6 +97,25 @@ def calculate_completeness(sentence):
             return False
 
     return True
+
+def save_card(arabic, english, lemma_ids):
+    """Adds a sentence to the deck, linking whitespace token i of `arabic` to lemma_ids[i] (None = leave unlinked)."""
+    sentence = Sentence(plaintext=arabic, translation=english, length=len(arabic.split()))
+    db.session.add(sentence)
+    db.session.flush()
+    for index, (token, lemma_id) in enumerate(zip(arabic.split(), lemma_ids)):
+        text = clean_punctuation(token)
+        if not text or not lemma_id:
+            continue
+        word = Word.query.filter_by(plaintext=text, lemma_id=lemma_id).first()
+        if not word:
+            word = Word(plaintext=text, lemma_id=lemma_id, prune=prune(text))
+            db.session.add(word)
+            db.session.flush()
+        db.session.add(WordInstance(sentence_id=sentence.sentence_id, word_id=word.word_id, index=index))
+    db.session.flush()
+    update_sentence_completeness(sentence)
+    return sentence
 
 def update_sentence_completeness(sentence):
     sentence.complete = calculate_completeness(sentence)
@@ -199,18 +249,12 @@ def unlink_word_instance():
 
 @main.route('/translate', methods=['POST'])
 def translate_text():
-    data = request.get_json()
-    text = data.get('q')
-    source_lang = data.get('source', 'ar')
-    target_lang = data.get('target', 'en')
-
+    text = request.get_json().get('q')
     if not text:
         return jsonify({'error': 'No text provided'}), 400
 
     try:
-        translator = GoogleTranslator(source=source_lang, target=target_lang)
-        translated_text = translator.translate(text)
-        return jsonify({'translatedText': translated_text})
+        return jsonify({'translatedText': translate(text)})
     except Exception as e:
         print(f"Translation Error: {e}")
         return jsonify({'error': 'Translation failed', 'details': str(e)}), 500
@@ -220,7 +264,6 @@ def suggest_words():
     """Suggests a translation and lemma for each word, lemmatized by Camelira in the context of `sentence`."""
     data = request.get_json()
     words = [w for w in map(clean_punctuation, data.get('words', [])) if w]
-    translator = GoogleTranslator(source='ar', target='en')
     suggestions = []
 
     try:
@@ -235,7 +278,7 @@ def suggest_words():
         except Exception:
             analysis = {}
         try:
-            translation = translator.translate(word_text)
+            translation = translate(word_text)
         except Exception as e:
             print(f"Translation Error: {e}")
             translation = ""
@@ -418,12 +461,21 @@ def twilio_webhook():
         db.session.rollback()
         return Response("<Response><Message>Error</Message></Response>", mimetype='text/xml')
 
+@main.route('/api/known-count')
+def known_count():
+    """How many lemmas you know: with none, the app points you to Calibrate."""
+    return jsonify({'known': Lemma.query.filter_by(known=True).count()})
+
 @main.route('/api/set-known/<int:lemma_id>', methods=['POST'])
 def set_known(lemma_id):
     try:
         lemma = Lemma.query.get_or_404(lemma_id)
         lemma.known = bool(request.get_json()['known'])
         lemma.source = 'user'
+        if lemma.known and lemma.p_learned is not None:  # your call overrides the model: known means L = 97%
+            lemma.p_learned = max(lemma.p_learned, 0.97)
+        elif not lemma.known:  # back to unknown: forget its review state, it'll be introduced again
+            lemma.p_learned = lemma.stability = lemma.last_review = lemma.due = None
         db.session.commit()
         return jsonify({'success': True, 'known': lemma.known})
     except Exception as e:

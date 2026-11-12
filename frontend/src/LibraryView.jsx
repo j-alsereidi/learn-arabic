@@ -17,11 +17,10 @@ import {
   CopyPlus,
   HelpCircle,
   Search,
-  Gauge,
-  Link as LinkIcon
+  Link as LinkIcon,
+  BookPlus
 } from 'lucide-react';
 import Gloss, { formatGloss } from './Gloss';
-import CalibrateView from './CalibrateView';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 
@@ -76,7 +75,9 @@ const TableRow = ({ data, columns, onClick, isActive, className = "" }) => (
 );
 
 // --- MAIN LIBRARY COMPONENT (Refactored logic from previous App) ---
-const LibraryView = () => {
+// Opens on a new-flashcard creator; picking a sentence opens it in the editor. focusSentenceId: open that one
+// (e.g. the Tutor's "view flashcard").
+const LibraryView = ({ focusSentenceId }) => {
   // Data State
   const [sentences, setSentences] = useState([]);
   const [words, setWords] = useState([]);
@@ -111,7 +112,6 @@ const LibraryView = () => {
   const [deleteConfirmWord, setDeleteConfirmWord] = useState(false);
   const [ambiguityModal, setAmbiguityModal] = useState(null);
 
-  const [isCalibrating, setIsCalibrating] = useState(false);
   const [lemmaQuery, setLemmaQuery] = useState("");
   const [lemmaResults, setLemmaResults] = useState([]);
 
@@ -161,13 +161,21 @@ const LibraryView = () => {
     fetchData();
   }, [fetchData]);
 
+  const editorRef = useRef(null);
+  const scrollToEditor = () => editorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); // the app scrolls <main>, not the window
+
+  // Back to the new-flashcard creator, with an empty draft
+  const closeSentence = () => {
+    setSelectedSentenceId(null);
+    setIsEditingSentence(false);
+    setIsEditingWord(false);
+    setEditingSentenceText("");
+    setTranslationInput("");
+  };
+
   useEffect(() => {
-      if (!loading && sentences.length > 0) {
-          if (!selectedSentenceId || !sentences.find(s => s.sentence_id === selectedSentenceId)) {
-              setSelectedSentenceId(sentences[0].sentence_id);
-          }
-      }
-  }, [loading, sentences, selectedSentenceId]);
+    if (focusSentenceId) { setSelectedSentenceId(focusSentenceId); setIsEditingSentence(false); setIsEditingWord(false); }
+  }, [focusSentenceId]);
 
   const selectedSentence = sentences.find(s => s.sentence_id === selectedSentenceId);
   const lemmaOf = (word) => lemmas.find(l => l.lemma_id === word?.lemma_id);
@@ -297,17 +305,18 @@ const LibraryView = () => {
     setEditingWordTrans(word.translation);
     setEditingLemmaTrans(lemma?.translation || "");
     setDeleteConfirmWord(false); 
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    scrollToEditor();
   };
 
   const handleSentenceSelect = (s) => {
     setIsEditingSentence(false);
+    setIsEditingWord(false);
     setSelectedSentenceId(s.sentence_id);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    scrollToEditor();
   };
 
   const handleTranslateSentence = async () => {
-    const textToTranslate = isEditingSentence ? editingSentenceText : selectedSentence?.plaintext;
+    const textToTranslate = selectedSentence && !isEditingSentence ? selectedSentence.plaintext : editingSentenceText;
     if (!textToTranslate) return;
 
     setIsTranslating(true);
@@ -319,6 +328,7 @@ const LibraryView = () => {
       });
       const data = await response.json();
       if (data.translatedText) setTranslationInput(data.translatedText);
+      else alert(data.details || "Translation failed.");
     } catch (error) {
       console.error("Translation error:", error);
     } finally {
@@ -494,6 +504,7 @@ const LibraryView = () => {
     try {
         const response = await fetch(`${API_BASE}/api/delete-sentence/${selectedSentenceId}`, { method: 'DELETE' });
         if (response.ok) {
+            closeSentence();
             await fetchData();
             setDeleteConfirmSentence(false); 
         } else {
@@ -771,19 +782,11 @@ const LibraryView = () => {
       );
     }
 
-    if (!selectedSentence && sentences.length > 0) {
-        return (
-            <div className="flex flex-col items-center justify-center h-64 text-slate-500 border-2 border-dashed border-slate-800 rounded-xl bg-slate-900/30">
-              <p className="text-lg">Select a sentence</p>
-            </div>
-        )
-    }
-
-    if (!selectedSentence) return null;
-
     if (isEditingWord) {
       return WordEditor();
     }
+
+    const creating = !selectedSentence;
 
     return (
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl relative overflow-hidden group">
@@ -792,19 +795,24 @@ const LibraryView = () => {
         <div className="relative z-10 flex flex-col gap-4">
           <div className="flex justify-between items-center">
              <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">
-               {isEditingSentence ? "Editing Sentence Text" : `Editing Sentence #${selectedSentence.sentence_id}`}
+               {creating ? "New flashcard" : isEditingSentence ? "Editing Sentence Text" : `Editing Sentence #${selectedSentence.sentence_id}`}
              </h2>
+             {!creating && (
+               <button onClick={closeSentence} title="New flashcard" aria-label="Close" className="p-1.5 -mr-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800 transition-colors">
+                 <X className="w-5 h-5" />
+               </button>
+             )}
           </div>
 
           <div className="bg-slate-950/50 rounded-lg p-8 min-h-[160px] flex items-center justify-center border border-slate-800 shadow-inner" dir="rtl">
-            {isEditingSentence ? (
-                /* EDIT MODE: TEXTAREA */
-                <textarea 
+            {isEditingSentence || creating ? (
+                /* EDIT / CREATE MODE: TEXTAREA */
+                <textarea
                     value={editingSentenceText}
                     onChange={(e) => setEditingSentenceText(e.target.value)}
                     className="w-full bg-transparent text-4xl leading-relaxed font-arabic text-slate-100 text-center outline-none border-none resize-none focus:ring-0"
-                    placeholder="Type sentence here..."
-                    autoFocus
+                    placeholder="اكتب جملة…"
+                    autoFocus={!creating}
                 />
             ) : (
                 /* VIEW MODE: INTERACTIVE TOKENS */
@@ -888,7 +896,17 @@ const LibraryView = () => {
           </div>
           
           <div className="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800/50 mt-2">
-            {isEditingSentence ? (
+            {creating ? (
+                /* CREATE MODE FOOTER */
+                <button
+                    onClick={handleCreateSentence}
+                    disabled={!editingSentenceText.trim()}
+                    className="ml-auto flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-semibold shadow-lg shadow-indigo-500/20 transition-all active:scale-95 disabled:opacity-40 disabled:hover:bg-indigo-600"
+                >
+                    <BookPlus className="w-4 h-4" />
+                    Create flashcard
+                </button>
+            ) : isEditingSentence ? (
                 /* EDIT MODE FOOTER */
                 <>
                     <button 
@@ -1041,26 +1059,12 @@ const LibraryView = () => {
   );
 
   // Render return for LibraryView
-  if (isCalibrating) {
-    return <CalibrateView onClose={() => { setIsCalibrating(false); fetchData(); }} />;
-  }
-
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
       {AmbiguityModal()}
 
-      <div className="flex justify-end -mb-4">
-        <button
-          onClick={() => setIsCalibrating(true)}
-          className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-colors border border-slate-700"
-        >
-          <Gauge className="w-4 h-4" />
-          Calibrate
-        </button>
-      </div>
-
       {/* Editor Section */}
-      <section>
+      <section ref={editorRef} className="scroll-mt-4">
         {SentenceEditor()}
       </section>
 
@@ -1082,7 +1086,7 @@ const LibraryView = () => {
                   onClick={() => setActiveTab(tab.id)}
                   disabled={loading}
                   className={`
-                    flex-1 py-4 px-6 text-sm font-medium flex items-center justify-center gap-2 transition-all relative
+                    flex-1 py-4 px-2 sm:px-6 text-sm font-medium flex items-center justify-center gap-2 transition-all relative
                     ${activeTab === tab.id ? 'text-indigo-400 bg-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}
                     ${loading ? 'opacity-50 cursor-not-allowed' : ''}
                   `}
