@@ -16,7 +16,8 @@
   // ---- server, through the background worker ----
   const api = (path, body) => new Promise((resolve, reject) =>
     chrome.runtime.sendMessage({ type: 'api', path, body }, (r) =>
-      r && r.ok ? resolve(r.data) : reject(new Error((r && r.error) || chrome.runtime.lastError?.message || 'No answer'))));
+      r && r.ok ? resolve(r.data) : reject(Object.assign(new Error((r && r.error) || chrome.runtime.lastError?.message || 'No answer'),
+        { signedOut: !!(r && r.signedOut) }))));
   const openAtlas = (id) => chrome.runtime.sendMessage({ type: 'atlas', id });
 
   // ---- glosses, as the website formats them (frontend/src/Gloss.jsx) ----
@@ -82,6 +83,7 @@
     #load { right: 16px; bottom: 16px; padding: 7px 12px; display: flex; align-items: center; gap: 8px; border-radius: 999px; font-size: 12px; color: #cbd5e1; }
     #load .spin { width: 14px; height: 14px; border: 2px solid #334155; border-top-color: #818cf8; border-radius: 50%; animation: spin .8s linear infinite; }
     #load.bad { color: #fb7185; } #load.bad .spin { display: none; }
+    #load.link { cursor: pointer; } #load.link:hover { color: #fda4af; }
     @keyframes spin { to { transform: rotate(360deg); } }
     [hidden] { display: none !important; }
   </style>
@@ -135,7 +137,7 @@
   // its own element. Joined with spaces, so each node's words line up with the ids that come back.
   const BLOCK = 'p, div, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, dd, dt, figcaption, caption, article, section, body';
   const queue = [];
-  let busy = false, total = 0, done = 0, failed = 0;
+  let busy = false, total = 0, done = 0, failed = 0, signedOut = false;
   function enqueue(nodes) {
     if (!nodes.length) return;
     const blocks = new Map();
@@ -154,6 +156,10 @@
     if (busy) {
       load.className = 'panel';
       load.querySelector('.text').textContent = `Lemmatizing ${Math.round((100 * done) / Math.max(1, total))}%`;
+      load.hidden = false;
+    } else if (signedOut) {
+      load.className = 'panel bad link';
+      load.querySelector('.text').textContent = 'Sign in to Flashcard Studio to see your words';
       load.hidden = false;
     } else if (failed) {
       load.className = 'panel bad';
@@ -191,6 +197,7 @@
         } catch (err) {
           console.warn('[Flashcard Studio Reader]', err.message);
           batch.forEach(retry);
+          if (err.signedOut) { signedOut = true; queue.length = 0; } // nothing will work until then
         }
       }
       done += count;
@@ -202,7 +209,7 @@
   }
 
   function scan() {
-    failed = 0;
+    failed = 0; signedOut = false;
     enqueue(textNodes(document.body));
   }
 
@@ -242,6 +249,9 @@
     if (now) { $('#pop').hidden = true; popFor = null; return; }
     popHide = setTimeout(() => { if (!pinned) { $('#pop').hidden = true; popFor = null; } }, 250);
   }
+  $('#load').addEventListener('click', () => {  // signed out: sign in, then rescan this page from the popup
+    if (signedOut) { chrome.runtime.sendMessage({ type: 'site' }); $('#load').hidden = true; }
+  });
   $('#pop').addEventListener('mouseenter', () => clearTimeout(popHide));
   $('#pop').addEventListener('mouseleave', () => hidePop());
 

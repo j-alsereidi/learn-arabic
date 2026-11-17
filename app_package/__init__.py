@@ -1,14 +1,19 @@
 from flask import Flask
 from flask_cors import CORS
+from dotenv import load_dotenv
+from werkzeug.middleware.proxy_fix import ProxyFix
+from datetime import timedelta
 import os
+import secrets
 import shutil
 
 # Import db from extensions
-from .extensions import db
+from .extensions import db, add_missing_columns
 
-# Two databases. data/static.db (in git): the Tatoeba sentences, never written at runtime. Your own data (the
-# lexicon with your known words and review state, your flashcards, calibration, reviews, settings) is
-# instance/user.db (not in git), started from data/example_user.db (in git) on the first run.
+# Shared data: data/static.db (in git), the Tatoeba sentences, never written at runtime; instance/accounts.db, the
+# accounts. Each account's own data (the lexicon with its known words and review state, flashcards, calibration,
+# reviews, settings) is instance/users/<uid>.db (see auth.py). instance/user.db is the data from before accounts,
+# also the database scripts work on.
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
 STATIC_DB = os.path.join(DATA_DIR, 'static.db')
 EXAMPLE_USER_DB = os.path.join(DATA_DIR, 'example_user.db')
@@ -29,20 +34,6 @@ def prepare_user_db(instance_path):
     return user
 
 
-def add_missing_columns():
-    """create_all() only makes missing tables; this adds columns new models gained to existing ones, in every database."""
-    from sqlalchemy import inspect, text
-    for key, metadata in db.metadatas.items():
-        engine = db.engines[key]
-        inspector = inspect(engine)
-        with engine.begin() as conn:
-            for table in metadata.sorted_tables:
-                have = {c['name'] for c in inspector.get_columns(table.name)}
-                for col in table.columns:
-                    if col.name not in have:
-                        conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN {col.name} {col.type.compile(engine.dialect)}'))
-
-
 def drop_legacy_tatoeba():
     """A user database from before the split still has its own copy of the Tatoeba table: keep its cached
     diacritics (now in tatoeba_diac) and drop the rest, which data/static.db has."""
@@ -61,8 +52,27 @@ def drop_legacy_tatoeba():
     print('Dropped the old Tatoeba table from the user database (it lives in data/static.db now)')
 
 
+def secret_key(instance_path):
+    """SECRET_KEY (signs the session cookies), else one made once and kept in instance/secret_key."""
+    if os.environ.get('SECRET_KEY'):
+        return os.environ['SECRET_KEY']
+    path = os.path.join(instance_path, 'secret_key')
+    try:
+        with open(path, 'x') as f:
+            f.write(secrets.token_hex(32))
+    except FileExistsError:
+        pass
+    with open(path) as f:
+        return f.read().strip()
+
+
 def create_app():
-    app = Flask(__name__)
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env'))
+    # INSTANCE_PATH: somewhere else for instance/ (tests)
+    app = Flask(__name__, instance_path=os.environ.get('INSTANCE_PATH') or None)
+    os.makedirs(app.instance_path, exist_ok=True)
+    # Behind Caddy: the scheme and host the visitor used (the Twilio signature covers the public URL)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
     # Enable CORS (adjust origins if you want stricter rules)
     # CORS(app, resources={r"/*": {"origins": ["http://localhost:3000"]}})
@@ -88,10 +98,17 @@ def create_app():
         db_path = prepare_user_db(app.instance_path)
         app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
         print(f"Using Local Database: {db_path}")
-    app.config["SQLALCHEMY_BINDS"] = {"static": os.environ.get("STATIC_DATABASE_URL") or f"sqlite:///{STATIC_DB}"}
+    app.config["SQLALCHEMY_BINDS"] = {
+        "static": os.environ.get("STATIC_DATABASE_URL") or f"sqlite:///{STATIC_DB}",
+        "accounts": f"sqlite:///{os.path.join(app.instance_path, 'accounts.db')}",
+    }
 
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev_key_for_now")
+    app.config["SECRET_KEY"] = secret_key(app.instance_path)
+    # Signed in for 60 days from the last visit. Lax: other sites can't send requests as you; the extension can
+    # (Chrome treats an extension's requests to sites it has permission for as same-site).
+    app.config.update(SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True,
+                      PERMANENT_SESSION_LIFETIME=timedelta(days=60))
 
     # Initialize extensions
     db.init_app(app)
@@ -106,6 +123,8 @@ def create_app():
     from .atlas import atlas
     from .srs import srs
     from .reader import reader
+    from .auth import auth
+    app.register_blueprint(auth)
     app.register_blueprint(main)
     app.register_blueprint(tutor)
     app.register_blueprint(calibrate)
@@ -116,8 +135,14 @@ def create_app():
     # Initialize Database logic
     with app.app_context():
         try:
-            db.create_all()
-            add_missing_columns()
+            from . import lexicon
+            db.create_all(bind_key='static')
+            add_missing_columns(db.metadatas['static'], db.engines['static'])
+            lexicon.ensure_lexicon(os.path.join(os.path.dirname(DATA_DIR), 'Final_Lexicon.csv'))
+            db.create_all(bind_key='accounts')
+            # the default database (instance/user.db: the data from before accounts, and what scripts work on)
+            lexicon.attach(db.engines[None], db.engines['static'].url.database)
+            lexicon.upgrade(db.engines[None])
             drop_legacy_tatoeba()
 
             # Seed if local OR explicitly requested

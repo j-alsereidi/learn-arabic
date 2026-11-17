@@ -13,7 +13,7 @@ import random
 from bisect import bisect_left, bisect_right
 from flask import Blueprint, Response, jsonify, request
 from .extensions import db
-from .models import Lemma, CalibrationStep
+from .models import CUSTOM_LEMMA_BASE, CalibrationStep, Lemma, LemmaState, set_states
 from .database import mark_known
 from .routes import lemma_json
 
@@ -64,7 +64,8 @@ def next_page(groups, chosen=None, rng=random):
 
 def rows():
     # Raw driver rows: ~3x faster than ORM rows for all ~40k lemmas
-    return db.session.connection().exec_driver_sql('SELECT lemma_id, known, source FROM lemma ORDER BY lemma_id').fetchall()
+    return db.session.connection().exec_driver_sql(
+        'SELECT lemma_id, known, source FROM lemmas WHERE lemma_id < ? ORDER BY lemma_id', (CUSTOM_LEMMA_BASE,)).fetchall()
 
 def page_json(chosen=None, step=None):
     """The next page to judge, or a submitted `step` viewed again, plus history and per-stratum progress."""
@@ -95,15 +96,15 @@ def page_json(chosen=None, step=None):
     })
 
 def judge(ids, unknown):
-    for lemma in Lemma.query.filter(Lemma.lemma_id.in_(ids)):
-        lemma.known, lemma.source = lemma.lemma_id not in unknown, 'user'
+    set_states([i for i in ids if i not in unknown], known=True, source='user')
+    set_states([i for i in ids if i in unknown], known=False, source='user')
 
 def infer_rest(stratum):
     """A clean sample page: every unjudged lemma in its stratum becomes known. Returns their prior states."""
-    lo, hi = strata(db.session.query(db.func.max(Lemma.lemma_id)).scalar())[stratum]
-    inferred = Lemma.query.filter(Lemma.lemma_id.between(lo, hi), Lemma.source.is_(None))
-    before = {i: [k, None] for i, k in inferred.with_entities(Lemma.lemma_id, Lemma.known)}
-    inferred.update({'known': True, 'source': 'inferred'}, synchronize_session=False)
+    lo, hi = strata(db.session.query(db.func.max(Lemma.lemma_id)).filter(Lemma.lemma_id < CUSTOM_LEMMA_BASE).scalar())[stratum]
+    before = {i: [k, None] for i, k in db.session.query(Lemma.lemma_id, Lemma.known)
+              .filter(Lemma.lemma_id.between(lo, hi), Lemma.source.is_(None))}
+    set_states(before, known=True, source='inferred')
     return before
 
 @calibrate.route('/api/calibrate')
@@ -145,8 +146,8 @@ def calibrate_edit(step_id):
             # only rows still inferred; anything judged since keeps that judgment
             prior = {int(i): k for i, (k, _) in (step.before or {}).items()}
             for known in (True, False):
-                Lemma.query.filter(Lemma.lemma_id.in_([i for i, k in prior.items() if bool(k) == known]),
-                                   Lemma.source == 'inferred').update({'known': known, 'source': None}, synchronize_session=False)
+                LemmaState.query.filter(LemmaState.lemma_id.in_([i for i, k in prior.items() if bool(k) == known]),
+                                        LemmaState.source == 'inferred').update({'known': known, 'source': None}, synchronize_session=False)
             step.before = {}
         elif now_clean and not was_clean:
             step.before = infer_rest(step.stratum)
@@ -161,7 +162,8 @@ def calibrate_edit(step_id):
 def reset_known():
     """Every lemma back to unknown and unjudged, so calibration starts over (page history included)."""
     try:
-        Lemma.query.update({'known': False, 'source': None}, synchronize_session=False)
+        LemmaState.query.update({'known': False, 'source': None}, synchronize_session=False)
+        LemmaState.query.filter(LemmaState.p_learned.is_(None), LemmaState.translation.is_(None)).delete()  # nothing left in them
         CalibrationStep.query.delete()
         db.session.commit()
         return jsonify({'success': True})

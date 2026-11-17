@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request
 from .extensions import db
-from .models import Lemma, Review, Sentence, Setting, TatoebaDiac, TatoebaSentence, Word, WordInstance, bare
+from .models import AnyWord, Lemma, LemmaState, Review, Sentence, Setting, TatoebaDiac, TatoebaSentence, WordInstance, bare, lemma_state
 from .atlas import align, assign_targets, comprehensible, in_deck, known_ids, lemma_rows, sentences
 from .routes import clean_punctuation, save_card
 from .tatoeba_import import MAX_CHARS, SEP, camelira
@@ -104,10 +104,10 @@ def queue():
     # Deck sentences by their linked lemmas, and by the word each is for
     assign_targets()
     links = {}
-    for sid, index, lid in (db.session.query(WordInstance.sentence_id, WordInstance.index, Word.lemma_id)
-                            .join(Word, Word.word_id == WordInstance.word_id)
+    for sid, index, lid in (db.session.query(WordInstance.sentence_id, WordInstance.index, AnyWord.lemma_id)
+                            .join(AnyWord, AnyWord.word_id == WordInstance.word_id)
                             .join(Sentence, Sentence.sentence_id == WordInstance.sentence_id)
-                            .filter(Sentence.complete, Word.lemma_id.isnot(None))):
+                            .filter(Sentence.complete, AnyWord.lemma_id.isnot(None))):
         links.setdefault(sid, {})[index] = lid
     by_lemma = {}
     for sid, idx in links.items():
@@ -121,7 +121,8 @@ def queue():
 
     # Reviews: due words that appear in a deck sentence, each with a sentence not already used today if possible
     due, used = [], set()
-    for l in Lemma.query.filter(Lemma.p_learned.isnot(None) if practice else Lemma.due < tomorrow).order_by(Lemma.due):
+    mine = db.select(LemmaState.lemma_id).where(LemmaState.p_learned.isnot(None) if practice else LemmaState.due < tomorrow)
+    for l in Lemma.query.filter(Lemma.lemma_id.in_(mine)).order_by(Lemma.due):
         options = sorted(by_target.get(l.lemma_id) or by_lemma.get(l.lemma_id, ()))  # its own cards, else any it's in
         if options:
             fresh = [s for s in options if s not in used] or options
@@ -171,7 +172,7 @@ def queue():
         history[key] = history.get(key, 0) + 1
     new_today = db.session.query(Review.lemma_id).filter(Review.role == 'intro', Review.at >= today).distinct().count()
 
-    studied = Lemma.query.filter(Lemma.p_learned.isnot(None)).all()
+    studied = Lemma.query.filter(Lemma.lemma_id.in_(db.select(LemmaState.lemma_id).where(LemmaState.p_learned.isnot(None)))).all()
     days_since = lambda l: (now - l.last_review).total_seconds() / 86400
     return jsonify({
         'due': [deck_card(lid, sid) for lid, sid in due],
@@ -203,16 +204,20 @@ def review_card():
             sid = sentence.sentence_id
         target, missed = data['target'], set(data.get('missed', []))
         changed = {}
-        for l in Lemma.query.filter(Lemma.lemma_id.in_(set(data['lemmas']) | {target})):
-            if l.lemma_id == target:
+        ids = {i for (i,) in db.session.query(Lemma.lemma_id).filter(Lemma.lemma_id.in_(set(data['lemmas']) | {target}))}
+        for lid in ids:  # your state for each word in the card (LemmaState: Lemma only reads it)
+            l = db.session.get(LemmaState, lid)
+            if lid == target:
+                l = l or lemma_state(lid)
                 apply(l, 'intro' if data.get('intro') else 'target', bool(data['ok']) and target not in missed, now, sid)
-            elif l.lemma_id in missed or l.p_learned is not None:
-                apply(l, 'context', l.lemma_id not in missed, now, sid)
+            elif lid in missed or (l and l.p_learned is not None):
+                l = l or lemma_state(lid)
+                apply(l, 'context', lid not in missed, now, sid)
             else:
                 continue
-            changed[l.lemma_id] = {'L': l.p_learned, 'status': status_of(l)}
+            changed[lid] = {'L': l.p_learned, 'status': status_of(l)}
         db.session.commit()
-        t = db.session.get(Lemma, target)
+        t = db.session.get(LemmaState, target)
         return jsonify({'sentence_id': sid, 'changed': changed, 'next': t.stability, 'status': status_of(t)})
     except Exception as e:
         db.session.rollback()

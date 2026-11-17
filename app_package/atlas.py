@@ -6,7 +6,7 @@ lemma with the same spelling is known (homographs are indistinguishable in runni
 """
 from flask import Blueprint, jsonify, request
 from .extensions import db
-from .models import Lemma, Review, Sentence, TatoebaSentence, Word, WordInstance, bare
+from .models import CUSTOM_LEMMA_BASE, AnyWord, Lemma, Review, Sentence, TatoebaSentence, WordInstance, bare
 from .routes import clean_punctuation, lemma_json, save_card
 
 atlas = Blueprint('atlas', __name__)
@@ -20,10 +20,18 @@ def sentences():
                       for s in TatoebaSentence.query.filter_by(unresolved=0)]
     return _sentences
 
+_lexicon = None  # per-worker cache of the shared lexicon's (lemma_id, plaintext) by rank; restart after changing it
+
 def lemma_rows():
-    """(lemma_id, plaintext, known, studied) by rank; studied = has spaced-repetition state (learning or known)."""
-    return db.session.connection().exec_driver_sql(
-        'SELECT lemma_id, plaintext, known, p_learned IS NOT NULL FROM lemma ORDER BY lemma_id').fetchall()
+    """(lemma_id, plaintext, known, studied) of the lexicon's lemmas by rank (not your own, which have no rank);
+    studied = has spaced-repetition state (learning or known)."""
+    global _lexicon
+    conn = db.session.connection()
+    if _lexicon is None:
+        _lexicon = conn.exec_driver_sql('SELECT lemma_id, plaintext FROM shared.lemma ORDER BY lemma_id').fetchall()
+    state = {i: (bool(k), bool(s)) for i, k, s in conn.exec_driver_sql(
+        'SELECT lemma_id, known, p_learned IS NOT NULL FROM lemma_state WHERE lemma_id < ?', (CUSTOM_LEMMA_BASE,))}
+    return [(i, p, *state.get(i, (False, False))) for i, p in _lexicon]
 
 def known_ids(rows):
     """Lemmas a sentence can use: known ones, and ones you're learning, so new sentences keep coming while you review."""
@@ -123,7 +131,7 @@ MIN_SENTENCES = 3
 @atlas.route('/api/atlas/occurrences')
 def occurrences():
     """Every lemma's corpus frequency by rank, comma-separated: the progress header works out text coverage from it."""
-    rows = db.session.connection().exec_driver_sql('SELECT lemma_id, occurrences FROM lemma ORDER BY lemma_id').fetchall()
+    rows = db.session.connection().exec_driver_sql('SELECT lemma_id, occurrences FROM shared.lemma ORDER BY lemma_id').fetchall()
     occ = [0] * rows[-1][0]
     for i, o in rows:
         occ[i - 1] = o or 0
@@ -173,8 +181,8 @@ def assign_targets():
     reviewed = dict(db.session.query(Review.sentence_id, Review.lemma_id)
                     .filter(Review.role.in_(['intro', 'target'])).order_by(Review.review_id).all())  # the latest wins
     linked = {}
-    for sid, lid in (db.session.query(WordInstance.sentence_id, Word.lemma_id).join(Word, Word.word_id == WordInstance.word_id)
-                     .filter(WordInstance.sentence_id.in_([s.sentence_id for s in missing]), Word.lemma_id.isnot(None))):
+    for sid, lid in (db.session.query(WordInstance.sentence_id, AnyWord.lemma_id).join(AnyWord, AnyWord.word_id == WordInstance.word_id)
+                     .filter(WordInstance.sentence_id.in_([s.sentence_id for s in missing]), AnyWord.lemma_id.isnot(None))):
         linked.setdefault(sid, set()).add(lid)
     rows = lemma_rows()
     text = {i: p for i, p, _, _ in rows}

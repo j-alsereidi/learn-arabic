@@ -226,7 +226,7 @@ def analyse_words(folder, items):
 def load(folder, items):
     from . import create_app
     from .extensions import db
-    from .models import Lemma, TatoebaSentence, nfc
+    from .models import LexiconLemma as Lemma, TatoebaSentence, nfc
     app = create_app()
     with app.app_context():
         by_text = {}

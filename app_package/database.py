@@ -1,11 +1,8 @@
-import csv
-import os
 import re
 from collections import Counter
 from .extensions import db
-from .models import Lemma, Word, Sentence, nfc, prune, bare, find_lemma, new_lemma
+from .models import Lemma, LemmaState, Word, Sentence, nfc, prune, bare, find_lemma, set_states
 
-DATA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # (sentence, translation, [(word, translation, lemma)])
 EXAMPLES = [
@@ -24,8 +21,7 @@ EXAMPLES = [
 ]
 
 def seed_database():
-    if not Lemma.query.first():
-        import_lexicon()
+    """Example flashcards for an empty database (the lexicon itself is shared: lexicon.ensure_lexicon)."""
     if not Sentence.query.first():
         for text, translation, words in EXAMPLES:
             db.session.add(Sentence(plaintext=text, translation=translation, complete=True, length=len(text.split())))
@@ -33,17 +29,6 @@ def seed_database():
                 db.session.add(Word(plaintext=word, translation=word_trans, prune=prune(word), lemma_id=find_lemma(lemma).lemma_id))
         print(f"Seeded {len(EXAMPLES)} example sentences.")
     db.session.commit()
-
-def import_lexicon():
-    """Loads Final_Lexicon.csv (rows in frequency order) and marks the lemmas in knownwords.txt as known."""
-    with open(os.path.join(DATA_DIR, 'Final_Lexicon.csv'), encoding='utf-8') as f:
-        lemmas = [new_lemma(r['Lemma'], r['Gloss'], occurrences=int(r['Occurrences'])) for r in csv.DictReader(f)]
-    db.session.add_all(lemmas)
-    db.session.flush()
-
-    with open(os.path.join(DATA_DIR, 'knownwords.txt'), encoding='utf-8') as f:
-        known, _ = mark_known(f.read())
-    print(f"Imported {len(lemmas)} lemmas ({known} known).")
 
 def mark_known(text):
     """Makes the lemmas listed in a knownwords.txt-style text known and every other lemma unknown and unjudged.
@@ -67,6 +52,6 @@ def mark_known(text):
             ids.append(lemma_id)
             chosen.add(lemma_id)
     not_found = [w for w, n in wanted.items() if n > 0 and leftover[bare(w)] > 0]
-    Lemma.query.update({'known': False, 'source': None}, synchronize_session=False)
-    Lemma.query.filter(Lemma.lemma_id.in_(ids)).update({'known': True}, synchronize_session=False)
+    LemmaState.query.update({'known': False, 'source': None}, synchronize_session=False)
+    set_states(ids, known=True)
     return len(ids), not_found

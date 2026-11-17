@@ -4,6 +4,8 @@ import FlashcardsView from './FlashcardsView';
 import TutorView from './TutorView';
 import AtlasView from './AtlasView';
 import CalibrateView from './CalibrateView';
+import { SignInDialog, SignInButton, AccountMenu } from './AccountView';
+import { currentSession, startGuest } from './auth';
 import {
   Languages,
   Library,
@@ -27,6 +29,8 @@ const linkedWord = Number(new URLSearchParams(window.location.search).get('atlas
 if (linkedWord) window.history.replaceState(null, '', window.location.pathname);  // a reload opens the app normally
 
 const App = () => {
+  const [user, setUser] = useState(undefined); // undefined: checking; null: a guest (data for this browser session only)
+  const [signingIn, setSigningIn] = useState(false); // the sign-in dialog, over the app
   const [currentView, setCurrentView] = useState(linkedWord ? 'atlas' : 'library');
   const [tutorAlert, setTutorAlert] = useState(false); // a tutor reply arrived while you were on another page
   const [libraryFocus, setLibraryFocus] = useState(null); // a sentence to open in the Library (the Tutor's "view flashcard")
@@ -43,9 +47,18 @@ const App = () => {
     if (id === 'atlas') setAtlasFocus(null);
     setCurrentView(id);
   };
+  useEffect(() => {  // signed in, a guest already, or new here: a guest, with the sign-in dialog open
+    currentSession().then(async (s) => {
+      if (s.user || s.guest) return setUser(s.user);
+      await startGuest();
+      setSigningIn(true);
+      setUser(null);
+    }).catch(() => setUser(null));
+  }, []);
   useEffect(() => {  // checked on every page change, so it stops glowing once you've calibrated
+    if (user === undefined) return;
     fetch(`${process.env.REACT_APP_API_URL || ''}/api/known-count`).then(r => r.json()).then(d => setKnowsNothing(d.known === 0)).catch(() => {});
-  }, [currentView]);
+  }, [currentView, user]);
   const alerting = (id) => currentView !== id && ((id === 'tutor' && tutorAlert) || (id === 'calibrate' && knowsNothing));
 
   const navButton = ({ id, label, icon: Icon }) => (
@@ -65,11 +78,13 @@ const App = () => {
     </button>
   );
 
+  if (user === undefined) return <div className="min-h-screen bg-slate-950" />;
+
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-indigo-500/30">
 
       {/* Sidebar Navigation */}
-      <nav className="w-64 bg-slate-900 border-r border-slate-800 p-6 flex flex-col hidden md:flex sticky top-0 h-screen">
+      <nav className="w-64 bg-slate-900 border-r border-slate-800 p-6 flex flex-col hidden md:flex sticky top-0 h-screen z-30">
 
         {/* Brand */}
         <div className="flex items-center gap-3 mb-10 px-2">
@@ -83,11 +98,20 @@ const App = () => {
 
         {/* Navigation Items */}
         <div className="space-y-3">{VIEWS.map(navButton)}</div>
-        <div className="mt-auto pt-6 border-t border-slate-800">{navButton(CALIBRATE)}</div>
+        <div className="mt-auto pt-6 border-t border-slate-800 space-y-3">
+          {navButton(CALIBRATE)}
+          {user ? <AccountMenu user={user} onUser={setUser} /> : <SignInButton onClick={() => setSigningIn(true)} />}
+        </div>
       </nav>
 
+      {/* Account on phones, where the sidebar is hidden */}
+      <div className="md:hidden fixed top-3 right-3 z-40">
+        {user ? <AccountMenu user={user} onUser={setUser} up={false} compact /> : <SignInButton onClick={() => setSigningIn(true)} compact />}
+      </div>
+      {signingIn && <SignInDialog onClose={() => setSigningIn(false)} />}
+
       {/* Main Content Area */}
-      <main className="flex-1 min-w-0 p-4 pb-24 md:p-8 overflow-y-auto max-h-screen [scrollbar-gutter:stable]">
+      <main className="flex-1 min-w-0 p-4 pt-16 pb-24 md:p-8 overflow-y-auto max-h-screen [scrollbar-gutter:stable]">
         <div className="max-w-7xl mx-auto h-full">
           {currentView === 'library' && <LibraryView focusSentenceId={libraryFocus} />}
           {currentView === 'flashcards' && <FlashcardsView onTutor={() => go('tutor')} onOpenWord={(id) => { setAtlasFocus(id); setCurrentView('atlas'); }} />}

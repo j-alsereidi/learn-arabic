@@ -5,3 +5,5 @@ gunicorn
 psycopg2-binary
 flask-cors
 python-dotenv
+google-auth
+requests

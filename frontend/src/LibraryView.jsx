@@ -1173,7 +1173,7 @@ const LibraryView = ({ focusSentenceId }) => {
                               ${highlightedWordId === w.word_id ? 'bg-indigo-500/20' : 'hover:bg-slate-800/30'}
                             `}
                           >
-                            <td className="p-4 text-sm font-mono text-slate-500">#{w.word_id}</td>
+                            <td className="p-4 text-sm font-mono text-slate-500">{w.word_id > 0 && `#${w.word_id}`}</td>
                             <td className="p-4 text-lg font-arabic text-indigo-400" dir="rtl">{lemmaOf(w)?.plaintext}</td>
                             <td className="p-4 text-lg font-arabic text-slate-200" dir="rtl">{w.plaintext}</td>
                             <td className="p-4 text-sm text-slate-300">{w.translation || formatGloss(lemmaOf(w)?.translation)}</td>

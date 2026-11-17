@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify, request, Response
-from .models import Sentence, Word, Lemma, WordInstance, nfc, prune, bare, find_lemma, new_lemma
+from .models import (AnyWord, CUSTOM_LEMMA_BASE, Lemma, MyLemma, Sentence, Word, WordInstance, bare, find_lemma,
+                     lemma_state, new_lemma, nfc, prune)
 from .extensions import db
 from deep_translator import GoogleTranslator
 from deep_translator.exceptions import TooManyRequests
@@ -62,13 +63,17 @@ def lemmatize(sentence):
     return {w['word']: w['analyses'][0]['analysis'] for w in disambig if w['analyses']}
 
 def link_lemma(text, translation):
-    """Existing lemma for text (creating it if missing), with translation applied when given."""
+    """Existing lemma for text (one of your own if the lexicon lacks it), with translation applied when given:
+    your gloss for a lexicon lemma, which only you see."""
     lemma = find_lemma(text, translation)
     if not lemma:
-        lemma = new_lemma(text)
+        lemma = new_lemma(text, translation)
         db.session.add(lemma)
-    if translation:
-        lemma.translation = translation
+    elif translation and translation != lemma.translation:
+        if lemma.lemma_id >= CUSTOM_LEMMA_BASE:
+            db.session.get(MyLemma, lemma.lemma_id).translation = translation
+        else:
+            lemma_state(lemma.lemma_id).translation = translation
     db.session.flush()
     return lemma
 
@@ -90,10 +95,10 @@ def calculate_completeness(sentence):
         token = clean_punctuation(raw_token)
         if idx in instances or not token:
             continue
-        if Word.query.filter_by(plaintext=token).first():
+        if AnyWord.query.filter_by(plaintext=token).first():
             continue
         # Single fuzzy match -> valid; none or ambiguous -> incomplete
-        if Word.query.filter_by(prune=prune(token)).count() != 1:
+        if AnyWord.query.filter_by(prune=prune(token)).count() != 1:
             return False
 
     return True
@@ -108,7 +113,7 @@ def save_card(arabic, english, lemma_ids, target=None):
         text = clean_punctuation(token)
         if not text or not lemma_id:
             continue
-        word = Word.query.filter_by(plaintext=text, lemma_id=lemma_id).first()
+        word = AnyWord.query.filter_by(plaintext=text, lemma_id=lemma_id).first()
         if not word:
             word = Word(plaintext=text, lemma_id=lemma_id, prune=prune(text))
             db.session.add(word)
@@ -145,17 +150,17 @@ def api_sentences():
     } for s in sentences])
 
 def relevant_words():
-    """Words the frontend needs: added by hand, or matching a token in some sentence.
-    Skips the ~40k self-words of unused lemmas, which would only bloat the payload."""
+    """Words the frontend needs: yours, and lemmas' own forms matching a token in some sentence.
+    Skips the ~40k own forms of unused lemmas, which would only bloat the payload."""
     prunes = {prune(clean_punctuation(t)) for (text,) in db.session.query(Sentence.plaintext) for t in text.split()}
-    return db.select(Word.word_id).join(Lemma).where(Word.prune.in_(prunes) | (Word.plaintext != Lemma.plaintext))
+    return db.select(AnyWord.word_id).where((AnyWord.word_id > 0) | AnyWord.prune.in_(prunes))
 
 def lemma_json(l):
     return {'lemma_id': l.lemma_id, 'plaintext': l.plaintext, 'translation': l.translation, 'known': l.known}
 
 @main.route('/api/words')
 def api_words():
-    words = Word.query.filter(Word.word_id.in_(relevant_words())).all()
+    words = AnyWord.query.filter(AnyWord.word_id.in_(relevant_words())).all()
     return jsonify([{
         'word_id': w.word_id,
         'plaintext': w.plaintext,
@@ -167,7 +172,7 @@ def api_words():
 @main.route('/api/lemmas')
 def api_lemmas():
     """Known lemmas plus those of the words /api/words sends; the Lemmas tab searches the rest."""
-    used = db.select(Word.lemma_id).where(Word.word_id.in_(relevant_words()))
+    used = db.select(AnyWord.lemma_id).where(AnyWord.word_id.in_(relevant_words()))
     return jsonify([lemma_json(l) for l in Lemma.query.filter(Lemma.known | Lemma.lemma_id.in_(used))])
 
 BUCKWALTER = str.maketrans(dict(zip(
@@ -325,11 +330,18 @@ def add_words():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-@main.route('/api/update-word/<int:word_id>', methods=['PUT'])
+@main.route('/api/update-word/<int(signed=True):word_id>', methods=['PUT'])
 def update_word(word_id):
     data = request.get_json()
     try:
-        word = Word.query.get(word_id)
+        word = db.session.get(Word, word_id)
+        own_form = db.session.get(AnyWord, word_id) if word_id < 0 else None
+        if own_form:  # a lemma's own form: edited, it becomes a word of yours, taking over its links
+            word = Word(plaintext=own_form.plaintext, lemma_id=own_form.lemma_id, prune=own_form.prune)
+            db.session.add(word)
+            db.session.flush()
+            WordInstance.query.filter_by(word_id=word_id).update({'word_id': word.word_id})
+            word_id = word.word_id
         if not word:
             return jsonify({'error': 'Word not found'}), 404
         if not data.get('lemma_plaintext'):
@@ -369,10 +381,11 @@ def delete_sentence(sentence_id):
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-@main.route('/api/delete-word/<int:word_id>', methods=['DELETE'])
+@main.route('/api/delete-word/<int(signed=True):word_id>', methods=['DELETE'])
 def delete_word(word_id):
+    """Deletes a word of yours; for a lemma's own form (the lexicon's), only its links go."""
     try:
-        word = Word.query.get(word_id)
+        word = db.session.get(AnyWord, word_id)
         if not word:
             return jsonify({'error': 'Word not found'}), 404
 
@@ -380,7 +393,8 @@ def delete_word(word_id):
         linked_ids = [i.sentence_id for i in linked]
         for inst in linked:
             db.session.delete(inst)
-        db.session.delete(word)
+        if word_id > 0:
+            db.session.delete(db.session.get(Word, word_id))
         db.session.flush()
 
         for sid in linked_ids:
@@ -439,28 +453,35 @@ def create_sentence():
 
 @main.route('/api/twilio/webhook', methods=['POST'])
 def twilio_webhook():
+    """A text to the Twilio number: a link code (see auth.phone_code) links the phone to an account; anything
+    else goes into the Library of the account the phone is linked to."""
+    from xml.sax.saxutils import escape
+    from flask import g
+    from .auth import link_phone, twilio_signature_ok, user_engine
+    from .models import Account
+    reply = lambda text: Response(f'<Response><Message>{escape(text)}</Message></Response>', mimetype='text/xml')
+    if not twilio_signature_ok():
+        return Response(status=403)
+    sender, body = request.form.get('From'), (request.form.get('Body') or '').strip()
+    if not sender or not body:
+        return reply('Error')
+    if re.fullmatch(r'\d{6}', body):
+        account = link_phone(sender, body)
+        return reply(f'Linked to {account.email}' if account else 'That code is wrong or expired')
+    account = Account.query.filter_by(phone=sender).first()
+    if not account:
+        return reply("This number isn't linked to a Flashcard Studio account")
+    g.user_engine = user_engine(account.uid)
     try:
-        message_body = request.form.get('Body')
-        if not message_body:
-            return Response("<Response><Message>Error</Message></Response>", mimetype='text/xml')
-
-        new_sentence = Sentence(
-            plaintext=message_body,
-            translation="",
-            complete=False,
-            length=len(message_body.split())
-        )
+        new_sentence = Sentence(plaintext=body, translation="", complete=False, length=len(body.split()))
         db.session.add(new_sentence)
         db.session.flush()
         update_sentence_completeness(new_sentence)
         db.session.commit()
-        return Response(
-            f"<Response><Message>Saved sentence ✅ \"{message_body}\"</Message></Response>",
-            mimetype='text/xml'
-        )
+        return reply(f'Saved sentence ✅ "{body}"')
     except Exception:
         db.session.rollback()
-        return Response("<Response><Message>Error</Message></Response>", mimetype='text/xml')
+        return reply('Error')
 
 @main.route('/api/known-count')
 def known_count():
@@ -470,7 +491,8 @@ def known_count():
 @main.route('/api/set-known/<int:lemma_id>', methods=['POST'])
 def set_known(lemma_id):
     try:
-        lemma = Lemma.query.get_or_404(lemma_id)
+        db.get_or_404(Lemma, lemma_id)
+        lemma = lemma_state(lemma_id)
         lemma.known = bool(request.get_json()['known'])
         lemma.source = 'user'
         if lemma.known and lemma.p_learned is not None:  # your call overrides the model: known means L = 97%

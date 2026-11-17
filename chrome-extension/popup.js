@@ -6,7 +6,12 @@ async function check() {
   status.className = ''; status.textContent = 'Connecting…';
   chrome.runtime.sendMessage({ type: 'api', path: '/api/known-count' }, (r) => {
     if (r && r.ok) { status.className = 'ok'; status.textContent = `Connected · you know ${r.data.known.toLocaleString()} words`; }
-    else { status.className = 'bad'; status.textContent = (r && r.error) || "Can't reach the server"; }
+    else if (r && r.signedOut) {
+      status.className = 'bad'; status.textContent = 'Not signed in · ';
+      const link = Object.assign(document.createElement('a'), { href: '#', textContent: 'Sign in' });
+      link.onclick = (e) => { e.preventDefault(); chrome.runtime.sendMessage({ type: 'site' }); window.close(); };
+      status.append(link);
+    } else { status.className = 'bad'; status.textContent = (r && r.error) || "Can't reach the server"; }
   });
 }
 
