@@ -64,11 +64,11 @@ def camelira(text, tries=4, timeout=60):
     return None
 
 
-def lemmatize_batch(batch):
+def lemmatize_batch(batch, tries=4, timeout=60):
     """[(id, [[word, lex, stemgloss], ...])] for a batch of (id, arabic) sharing one Camelira request."""
-    result = camelira(f' {SEP} '.join(text for _, text in batch))
+    result = camelira(f' {SEP} '.join(text for _, text in batch), tries, timeout)
     if result is None:  # a whole batch can be refused (too many words with the separators): try them one by one
-        return [r for item in batch for r in lemmatize_batch([item])] if len(batch) > 1 else []
+        return [r for item in batch for r in lemmatize_batch([item], tries, timeout)] if len(batch) > 1 else []
     sentences, current = [], []
     for w in result:
         if w['word'] == SEP:
@@ -78,7 +78,7 @@ def lemmatize_batch(batch):
         current.append([w['word'], a.get('lex'), re.sub(r'_\[\w+\]', '', a.get('stemgloss', ''))])
     sentences.append(current)
     if len(sentences) != len(batch):  # a sentence held a token Camelira split oddly; redo them one by one
-        return [r for item in batch for r in lemmatize_batch([item])] if len(batch) > 1 else []
+        return [r for item in batch for r in lemmatize_batch([item], tries, timeout)] if len(batch) > 1 else []
     return [(i, words) for (i, _), words in zip(batch, sentences)]
 
 

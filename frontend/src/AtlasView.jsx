@@ -198,6 +198,34 @@ const Heatmap = ({ states, texts, focus, centerOn, onPick }) => {
   );
 };
 
+// ---- After adding flashcards: the deck's totals, rising from the old numbers to the new ----
+const TotalsToast = ({ toast, onDone }) => {
+  const [shown, setShown] = useState(toast.before);
+  useEffect(() => {
+    const rise = setTimeout(() => setShown(toast.after), 450), done = setTimeout(onDone, 2900);
+    return () => { clearTimeout(rise); clearTimeout(done); };
+  }, [toast, onDone]);
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center pointer-events-none" role="status">
+      <style>{`
+        .totals-toast { animation: totals-toast 2.9s ease forwards; }
+        @keyframes totals-toast { 0% { opacity: 0; transform: scale(.96); } 8%, 85% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+        .totals-rise { display: inline-block; animation: totals-rise .45s cubic-bezier(.2,.8,.3,1.25); }
+        @keyframes totals-rise { from { transform: translateY(.5em); opacity: 0; } }
+        @media (prefers-reduced-motion: reduce) { .totals-toast, .totals-rise { animation: none; } }
+      `}</style>
+      <div className="totals-toast bg-slate-900/95 border border-slate-700 rounded-2xl shadow-2xl px-10 py-7 flex gap-12 text-center">
+        {[[shown.cards, 'flashcards'], [shown.words, 'words']].map(([v, label]) => (
+          <div key={label}>
+            <div className="text-5xl font-bold text-white tabular-nums overflow-hidden"><span key={v} className="totals-rise">{v.toLocaleString('en-US')}</span></div>
+            <div className="text-slate-400 mt-1">{label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 // ---- One Tatoeba sentence: click to select it for the Create flashcard button ----
 const SentenceRow = ({ s, selected, onSelect, dictionary, onWord }) => {
   const [copied, setCopied] = useState(false);
@@ -225,6 +253,7 @@ const SentenceRow = ({ s, selected, onSelect, dictionary, onWord }) => {
 // ---- Search (ID, Arabic, Buckwalter, English), as in the Library ----
 const SearchBox = ({ onPick }) => {
   const [q, setQ] = useState(''), [hits, setHits] = useState([]), [open, setOpen] = useState(false);
+  const input = useRef(null);
   useEffect(() => {
     if (!q.trim()) { setHits([]); return; }
     let stale = false;
@@ -234,12 +263,12 @@ const SearchBox = ({ onPick }) => {
     }, 200);
     return () => { stale = true; clearTimeout(t); };
   }, [q]);
-  const pick = (id) => { setOpen(false); onPick(id); };
+  const pick = (id) => { setOpen(false); input.current?.blur(); onPick(id); }; // leaving the box frees the arrow keys for the map
   return (
     <div className="relative">
       <Search className="w-4 h-4 text-slate-500 absolute left-4 top-1/2 -translate-y-1/2" />
       <input
-        value={q} onChange={(e) => setQ(e.target.value)} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
+        ref={input} value={q} onChange={(e) => setQ(e.target.value)} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
         onKeyDown={(e) => { if (e.key === 'Enter' && hits[0]) pick(hits[0].lemma_id); if (e.key === 'Escape') setOpen(false); }}
         placeholder="ID, عربي, Buckwalter, English"
         className="w-full bg-slate-900 border border-slate-800 rounded-xl py-3 pl-11 pr-4 text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-600"
@@ -261,7 +290,8 @@ const SearchBox = ({ onPick }) => {
   );
 };
 
-const AtlasView = ({ onCalibrate }) => {
+// focusWordId: open on that word (e.g. from the Flashcards page)
+const AtlasView = ({ onCalibrate, focusWordId }) => {
   const [summary, setSummary] = useState(null); // {states, ready, words}
   const [texts, setTexts] = useState(null);
   const [occ, setOcc] = useState(null); // corpus frequency by rank, for the progress header
@@ -273,19 +303,23 @@ const AtlasView = ({ onCalibrate }) => {
   const [frontier, setFrontier] = useState({ words: [], dictionary: {} });
   const [count, setCount] = useState(10);
   const [choice, setChoice] = useState({}); // lemma_id -> chosen sentence index (Edit)
-  const [editing, setEditing] = useState(null); // the words being edited: the auto-create batch, or one suggestion
+  const [editing, setEditing] = useState(false); // the auto-create batch is open for editing
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState(0);
-  const mapRef = useRef(null), detailRef = useRef(null), autoRef = useRef(null), latest = useRef(null);
+  const [skip, setSkip] = useState([]); // words removed from auto-create (this visit)
+  const [toast, setToast] = useState(null); // deck totals after an auto-create
+  const mapRef = useRef(null), heatRef = useRef(null), detailRef = useRef(null), autoRef = useRef(null), latest = useRef(null);
+  const skipRef = useRef(skip); skipRef.current = skip;
+  const frontierUrl = (skipped) => `${API_BASE}/api/atlas/frontier?n=${MAX_ADD}${skipped.length ? `&skip=${skipped.join(',')}` : ''}`;
 
   const loadSummary = useCallback(async () => {
     const [s, f] = await Promise.all([
       fetch(`${API_BASE}/api/atlas`).then(r => r.json()),
-      fetch(`${API_BASE}/api/atlas/frontier?n=${MAX_ADD}`).then(r => r.json()),
+      fetch(frontierUrl(skipRef.current)).then(r => r.json()),
     ]);
     setSummary(s); setFrontier(f);
-    setCount(c => Math.max(1, Math.min(c, s.words, MAX_ADD)));
-  }, []);
+    setCount(c => Math.max(1, Math.min(c, f.words.length)));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const loadDetail = useCallback(async (id) => {
     latest.current = id;
     const d = id ? await fetch(`${API_BASE}/api/atlas/word/${id}`).then(r => r.json()) : null;
@@ -304,10 +338,31 @@ const AtlasView = ({ onCalibrate }) => {
   const refresh = () => Promise.all([loadSummary(), loadDetail(detailId)]);
   const focusWord = (id, center = true) => { setFocus(id); setDetailId(id); if (center) setCenterOn({ id, at: Date.now() }); };
   const jumpToAuto = () => { autoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); setFlash(f => f + 1); };
-  const addSentences = async (ids) => {
+  // items: [{id: Tatoeba sentence, target: the word it's the flashcard for}]
+  const addSentences = async (items, showTotals = false) => {
     setBusy(true);
-    try { await post('/api/atlas/add', { ids }); setChoice({}); await refresh(); } finally { setBusy(false); }
+    try {
+      const res = await post('/api/atlas/add', { items }).then(r => r.json());
+      if (showTotals && res.after) setToast({ ...res, id: Date.now() });
+      setChoice({});
+      await refresh();
+    } finally { setBusy(false); }
   };
+  // Removing a word re-plans the batch: later words may have relied on it for their sentences
+  const removeWord = async (id) => {
+    const next = [...skip, id];
+    setSkip(next);
+    setFrontier(await fetch(frontierUrl(next)).then(r => r.json()));
+  };
+  const openedFor = useRef(null);
+  useEffect(() => {  // arriving with a word to show (from Flashcards): focus it and bring the map into view
+    if (focusWordId && summary && openedFor.current !== focusWordId) {
+      openedFor.current = focusWordId;
+      focusWord(focusWordId);
+      mapRef.current?.scrollIntoView({ block: 'start' });
+    }
+  }, [focusWordId, summary]); // eslint-disable-line react-hooks/exhaustive-deps
+  const closeToast = useCallback(() => setToast(null), []);
   const setKnown = async (id, known) => { await post(`/api/set-known/${id}`, { known }); await refresh(); };
   const chosen = (w) => w.sentences[Math.min(choice[w.lemma_id] || 0, w.sentences.length - 1)];
   const words = frontier.words, batch = words.slice(0, count);
@@ -336,7 +391,7 @@ const AtlasView = ({ onCalibrate }) => {
       if (s) setSelected(s.id);
     } else if (e.key === 'Enter' && canCreate && (!e.target.closest?.('button, a, [role="button"]') || e.target.dataset?.sentence !== undefined)) {
       e.preventDefault();
-      addSentences([selected]);
+      addSentences([{ id: selected, target: detail.lemma_id }]);
     }
   };
   keyUp.current = (e) => { if (e.key.startsWith('Arrow') && pending.current != null) { setDetailId(pending.current); pending.current = null; } };
@@ -347,17 +402,17 @@ const AtlasView = ({ onCalibrate }) => {
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKeyUp); };
   }, []);
 
-  const maxN = summary ? Math.min(summary.words, MAX_ADD) : 0;
+  const maxN = Math.min(words.length, MAX_ADD);
   const glosses = detail ? [...new Set((detail.translation || '').split('#').map(formatGloss).filter(Boolean))] : [];
   const detailKnown = detail && summary?.states[detail.lemma_id - 1] === 'k';
 
   return (
     <div className="space-y-6">
       <div className="pt-2 pb-6"><ProgressHero states={summary?.states} occ={occ} onCalibrate={onCalibrate} /></div>
-      <SearchBox onPick={(id) => focusWord(id)} />
+      <SearchBox onPick={(id) => { focusWord(id); heatRef.current?.focus({ preventScroll: true }); }} />
 
       <div ref={mapRef} className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-6 scroll-mt-4">
-        <div className="relative">
+        <div ref={heatRef} tabIndex={-1} className="relative outline-none">
           {summary
             ? <Heatmap states={summary.states} texts={texts} focus={focus} centerOn={centerOn} onPick={(id) => focusWord(id, false)} />
             : <div className="h-[55vh] lg:h-[560px] rounded-xl bg-slate-950 grid place-items-center text-indigo-400"><Loader className="w-8 h-8 animate-spin" aria-label="Loading" /></div>}
@@ -413,7 +468,7 @@ const AtlasView = ({ onCalibrate }) => {
               </div>
               {detail.sentences.length > 0 && (
                 <div className="p-4 border-t border-slate-800">
-                  <button onClick={() => addSentences([selected])} disabled={!canCreate}
+                  <button onClick={() => addSentences([{ id: selected, target: detail.lemma_id }])} disabled={!canCreate}
                           className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-lg text-sm font-semibold disabled:opacity-40 disabled:hover:bg-indigo-600">
                     {busy ? <Loader className="w-4 h-4 animate-spin" /> : selectedSentence?.in_deck ? <Check className="w-4 h-4" /> : <BookPlus className="w-4 h-4" />}
                     Create flashcard
@@ -441,11 +496,11 @@ const AtlasView = ({ onCalibrate }) => {
           <input type="number" min={1} max={maxN} value={count} disabled={!maxN} aria-label="Number of sentences"
                  onChange={(e) => setCount(Math.max(1, Math.min(maxN, +e.target.value || 1)))}
                  className="w-20 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-center text-slate-200" />
-          <button onClick={() => setEditing(batch)} disabled={!maxN} aria-label="Edit" title="Edit"
+          <button onClick={() => setEditing(true)} disabled={!maxN} aria-label="Edit" title="Edit"
                   className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700 disabled:opacity-40">
             <Pencil className="w-4 h-4" />
           </button>
-          <button onClick={() => addSentences(batch.map(w => chosen(w).id))} disabled={!maxN || busy}
+          <button onClick={() => addSentences(batch.map(w => ({ id: chosen(w).id, target: w.lemma_id })), true)} disabled={!maxN || busy}
                   className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-40">
             {busy ? <Loader className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} {count}
           </button>
@@ -469,7 +524,7 @@ const AtlasView = ({ onCalibrate }) => {
               <div className="text-sm text-slate-300 truncate">{formatGloss(w.translation)}</div>
               <div className="text-xs text-slate-500 mt-0.5"><b className="text-slate-300">{w.count}</b> i+1 {w.count === 1 ? 'card' : 'cards'} found</div>
             </div>
-            <button onClick={(e) => { e.stopPropagation(); addSentences([chosen(w).id]); }} aria-label="Add 1st flashcard" title="Add 1st flashcard" className="p-2 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800"><BookPlus className="w-5 h-5" /></button>
+            <button onClick={(e) => { e.stopPropagation(); addSentences([{ id: chosen(w).id, target: w.lemma_id }]); }} aria-label="Add 1st flashcard" title="Add 1st flashcard" className="p-2 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800"><BookPlus className="w-5 h-5" /></button>
             <button onClick={(e) => { e.stopPropagation(); setKnown(w.lemma_id, true); }} aria-label="Mark known" title="Mark known" className="p-2 rounded-lg text-slate-500 hover:text-emerald-400 hover:bg-slate-800"><Check className="w-5 h-5" /></button>
           </div>
         ))}
@@ -479,19 +534,20 @@ const AtlasView = ({ onCalibrate }) => {
       {/* Edit: the sentence chosen for each word, swappable; hover a word for its dictionary entry */}
       {editing && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
-             onClick={(e) => e.target === e.currentTarget && setEditing(null)}
-             onKeyDown={(e) => e.key === 'Escape' && setEditing(null)}>
+             onClick={(e) => e.target === e.currentTarget && setEditing(false)}
+             onKeyDown={(e) => e.key === 'Escape' && setEditing(false)}>
           <div className="bg-slate-900 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
             <div className="flex items-center justify-between p-4 border-b border-slate-800">
-              <span className="flex items-center gap-2 text-sm font-semibold text-slate-300"><WandSparkles className="w-4 h-4 text-indigo-400" />{editing.length}</span>
-              <button onClick={() => setEditing(null)} aria-label="Close" className="p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800"><X className="w-5 h-5" /></button>
+              <span className="flex items-center gap-2 text-sm font-semibold text-slate-300"><WandSparkles className="w-4 h-4 text-indigo-400" />{batch.length}</span>
+              <button onClick={() => setEditing(false)} aria-label="Close" className="p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800"><X className="w-5 h-5" /></button>
             </div>
             <div className="overflow-y-auto custom-scrollbar p-4 pb-16 space-y-2">
-              {editing.map(w => {
+              {batch.map(w => {
                 const k = Math.min(choice[w.lemma_id] || 0, w.sentences.length - 1), s = w.sentences[k], many = w.sentences.length > 1;
                 const swap = (d) => setChoice(c => ({ ...c, [w.lemma_id]: (k + d + w.sentences.length) % w.sentences.length }));
                 return (
-                  <div key={w.lemma_id} className="grid grid-cols-[auto_1fr_auto] items-center gap-3 p-3 rounded-xl border border-slate-800">
+                  <div key={w.lemma_id} className="grid grid-cols-[auto_auto_1fr_auto] items-center gap-3 p-3 rounded-xl border border-slate-800">
+                    <button onClick={() => removeWord(w.lemma_id)} aria-label="Remove from auto-create" title="Remove from auto-create" className="p-1.5 rounded-md text-slate-600 hover:text-rose-400 hover:bg-slate-800"><X className="w-4 h-4" /></button>
                     <span className="font-arabic text-lg text-amber-300 w-20 text-center" dir="rtl">{w.plaintext}</span>
                     <div className="min-w-0">
                       <div className="font-arabic text-lg leading-relaxed text-slate-100" dir="rtl"><Marked words={s.words} dictionary={frontier.dictionary} /></div>
@@ -506,15 +562,18 @@ const AtlasView = ({ onCalibrate }) => {
                 );
               })}
             </div>
-            <div className="p-4 border-t border-slate-800 flex justify-end">
-              <button onClick={async () => { await addSentences(editing.map(w => chosen(w).id)); setEditing(null); }} disabled={busy}
+            <div className="p-4 border-t border-slate-800 flex items-center gap-4">
+              <input type="range" min={1} max={Math.max(1, maxN)} value={count} onChange={(e) => setCount(+e.target.value)}
+                     aria-label="Number of words" className="flex-1 accent-indigo-500" />
+              <button onClick={() => { addSentences(batch.map(w => ({ id: chosen(w).id, target: w.lemma_id })), true); setEditing(false); }} disabled={busy || !batch.length}
                       className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-40">
-                {busy ? <Loader className="w-4 h-4 animate-spin" /> : <BookPlus className="w-4 h-4" />} {editing.length}
+                {busy ? <Loader className="w-4 h-4 animate-spin" /> : <BookPlus className="w-4 h-4" />} {batch.length}
               </button>
             </div>
           </div>
         </div>
       )}
+      {toast && <TotalsToast key={toast.id} toast={toast} onDone={closeToast} />}
     </div>
   );
 };

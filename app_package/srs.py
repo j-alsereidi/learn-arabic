@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request
 from .extensions import db
 from .models import Lemma, Review, Sentence, Setting, TatoebaDiac, TatoebaSentence, Word, WordInstance, bare
-from .atlas import align, comprehensible, in_deck, known_ids, lemma_rows, sentences
+from .atlas import align, assign_targets, comprehensible, in_deck, known_ids, lemma_rows, sentences
 from .routes import clean_punctuation, save_card
 from .tatoeba_import import MAX_CHARS, SEP, camelira
 
@@ -80,12 +80,12 @@ def new_per_day():
     s = db.session.get(Setting, 'new_per_day')
     return int(s.value) if s else 5
 
-def card(ar, en, ids, target, lemmas, sentence_id=None, tatoeba_id=None):
+def card(ar, en, ids, target, lemmas, sentence_id=None, tatoeba_id=None, cards=0):
     """A sentence as a card: words are [token, lemma id, lemma, gloss, L or None]."""
     def word(token, i):
         l = lemmas.get(i)
         return [token, i, l.plaintext, l.translation, l.p_learned] if l else [token, None, None, None, None]
-    return {'sentence_id': sentence_id, 'tatoeba_id': tatoeba_id, 'target': target, 'ar': ar, 'en': en,
+    return {'sentence_id': sentence_id, 'tatoeba_id': tatoeba_id, 'target': target, 'ar': ar, 'en': en, 'cards': cards,  # cards: the word's flashcards
             'words': [word(t, i) for t, i in zip(ar.split(), ids)]}
 
 
@@ -101,7 +101,8 @@ def queue():
     today = (now - tz).replace(hour=0, minute=0, second=0, microsecond=0) + tz  # local midnight, in UTC
     tomorrow = today + timedelta(days=1)
 
-    # Deck sentences by their linked lemmas
+    # Deck sentences by their linked lemmas, and by the word each is for
+    assign_targets()
     links = {}
     for sid, index, lid in (db.session.query(WordInstance.sentence_id, WordInstance.index, Word.lemma_id)
                             .join(Word, Word.word_id == WordInstance.word_id)
@@ -113,11 +114,15 @@ def queue():
         for lid in idx.values():
             by_lemma.setdefault(lid, set()).add(sid)
     deck = {s.sentence_id: s for s in Sentence.query.filter(Sentence.sentence_id.in_(links))}
+    by_target = {}
+    for sid, s in deck.items():
+        if s.target_lemma_id:
+            by_target.setdefault(s.target_lemma_id, set()).add(sid)
 
     # Reviews: due words that appear in a deck sentence, each with a sentence not already used today if possible
     due, used = [], set()
     for l in Lemma.query.filter(Lemma.p_learned.isnot(None) if practice else Lemma.due < tomorrow).order_by(Lemma.due):
-        options = sorted(by_lemma.get(l.lemma_id, ()))
+        options = sorted(by_target.get(l.lemma_id) or by_lemma.get(l.lemma_id, ()))  # its own cards, else any it's in
         if options:
             fresh = [s for s in options if s not in used] or options
             sid = random.choice(fresh)
@@ -131,9 +136,14 @@ def queue():
     known = known_ids(rows)
     new = {}
     for sid, idx in links.items():
-        unknown = set(idx.values()) - known
-        if len(unknown) == 1:
-            new.setdefault(unknown.pop(), ('deck', sid))
+        target = deck[sid].target_lemma_id
+        if target:
+            if target not in known:
+                new.setdefault(target, ('deck', sid))
+        else:
+            unknown = set(idx.values()) - known
+            if len(unknown) == 1:
+                new.setdefault(unknown.pop(), ('deck', sid))
     ready = comprehensible(known)
     deck_text = in_deck()
     for lid, opts in ready.items():
@@ -148,9 +158,10 @@ def queue():
 
     def deck_card(target, sid):
         s = deck[sid]
-        return card(s.plaintext, s.translation, [links[sid].get(i) for i in range(len(s.plaintext.split()))], target, lemmas, sentence_id=sid)
+        return card(s.plaintext, s.translation, [links[sid].get(i) for i in range(len(s.plaintext.split()))], target, lemmas,
+                    sentence_id=sid, cards=len(by_target.get(target, ())))
 
-    new_cards = [deck_card(lid, src) if kind == 'deck' else card(src[1], src[2], align(src[1], src[3]), lid, lemmas, tatoeba_id=src[0])
+    new_cards = [deck_card(lid, src) if kind == 'deck' else card(src[1], src[2], align(src[1], src[3]), lid, lemmas, tatoeba_id=src[0], cards=len(by_target.get(lid, ())))
                  for lid, (kind, src) in new]
 
     # Heatmap: cards reviewed per local day (context words aren't separate reviews)
@@ -186,7 +197,8 @@ def review_card():
         if sid is None and data.get('tatoeba_id') is not None:  # a Tatoeba sentence joins the deck when first shown
             s = next(s for s in sentences() if s[0] == data['tatoeba_id'])
             existing = Sentence.query.filter_by(plaintext=s[1]).first()
-            sentence = existing or save_card(s[1], s[2], align(s[1], s[3]))
+            sentence = existing or save_card(s[1], s[2], align(s[1], s[3]), target=data['target'])
+            sentence.target_lemma_id = sentence.target_lemma_id or data['target']
             sentence.diac = sentence.diac or (db.session.get(TatoebaDiac, s[0]) or TatoebaDiac()).diac
             sid = sentence.sentence_id
         target, missed = data['target'], set(data.get('missed', []))

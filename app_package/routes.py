@@ -98,9 +98,10 @@ def calculate_completeness(sentence):
 
     return True
 
-def save_card(arabic, english, lemma_ids):
-    """Adds a sentence to the deck, linking whitespace token i of `arabic` to lemma_ids[i] (None = leave unlinked)."""
-    sentence = Sentence(plaintext=arabic, translation=english, length=len(arabic.split()))
+def save_card(arabic, english, lemma_ids, target=None):
+    """Adds a sentence to the deck, linking whitespace token i of `arabic` to lemma_ids[i] (None = leave unlinked).
+    target: the lemma the flashcard is for."""
+    sentence = Sentence(plaintext=arabic, translation=english, length=len(arabic.split()), target_lemma_id=target)
     db.session.add(sentence)
     db.session.flush()
     for index, (token, lemma_id) in enumerate(zip(arabic.split(), lemma_ids)):

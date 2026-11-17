@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
-import { Eye, Check, X, Sparkles, CalendarDays, Layers, Flame, TriangleAlert, RotateCw, Loader, GraduationCap } from 'lucide-react';
+import { Eye, Check, X, Sparkles, CalendarDays, Layers, Flame, TriangleAlert, RotateCw, Loader, GraduationCap, Trash2, BookPlus } from 'lucide-react';
 import { formatGloss } from './Gloss';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
@@ -79,10 +79,12 @@ const Heatmap = ({ past, future }) => {
     for (let d = 0; d < 7; d++) {
       const off = start + w * 7 + d;
       if (off > ahead * 7 + (6 - dow)) continue;
-      const v = off < 0 ? past[localDay(dateAt(off))] || 0 : future[off] || 0;
-      const fill = off < 0 ? (v ? shade(v, PAST) : '#111a2e') : (v >= 0.5 ? shade(v, FUTURE) : '#111a2e');
+      const done = off <= 0 ? past[localDay(dateAt(off))] || 0 : 0;
+      const reviewed = off < 0 || (off === 0 && done > 0);  // reviews done win over the forecast, today included
+      const v = reviewed ? done : future[off] || 0;
+      const fill = reviewed ? (v ? shade(v, PAST) : '#111a2e') : (v >= 0.5 ? shade(v, FUTURE) : '#111a2e');
       cells.push(<rect key={off} x={left + w * step} y={top + d * step} width={cell} height={cell} rx={3} fill={fill}
-        stroke={off === 0 ? '#fff' : undefined} strokeWidth={1.5} data-off={off} data-v={v} />);
+        stroke={off === 0 ? '#fff' : undefined} strokeWidth={1.5} data-off={off} data-v={v} data-r={reviewed ? 1 : 0} />);
     }
   }
   const onMove = (e) => {
@@ -90,7 +92,8 @@ const Heatmap = ({ past, future }) => {
     if (off === undefined) return setTip(null);
     const o = +off, v = Math.round(+e.target.dataset.v);
     const date = dateAt(o).toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' });
-    setTip({ x: e.clientX, y: e.clientY, date, text: o < 0 ? (v ? `${v} reviews` : 'No reviews') : o === 0 ? `Today: ${v} cards` : `Forecast: ≈ ${v} reviews` });
+    const r = e.target.dataset.r === '1';
+    setTip({ x: e.clientX, y: e.clientY, date, text: o < 0 ? (v ? `${v} reviews` : 'No reviews') : o === 0 ? (r ? `Today: ${v} reviews` : `Today: ${v} cards`) : `Forecast: ≈ ${v} reviews` });
   };
   return (
     <div ref={ref} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
@@ -130,8 +133,8 @@ function pick(s) {  // a new word after every two reviews, or whenever reviews r
   return { ...s, ...fresh, cur: null };
 }
 
-// onTutor: go to the Tutor (offered once today's cards are done)
-const FlashcardsView = ({ onTutor }) => {
+// onTutor: go to the Tutor (offered once today's cards are done); onOpenWord: show a word on the Atlas
+const FlashcardsView = ({ onTutor, onOpenWord }) => {
   const [data, setData] = useState(null);
   const [failed, setFailed] = useState(false);
   const [s, setS] = useState(null);
@@ -141,6 +144,7 @@ const FlashcardsView = ({ onTutor }) => {
   const [draftNew, setDraftNew] = useState(null);  // the slider while it's held: only the heatmap follows it
   const [diac, setDiac] = useState({});  // card key -> diacritized sentence
   const [diacReady, setDiacReady] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(null); // the card whose Delete was clicked once (a second click deletes)
   const [practiceState, setPracticeState] = useState(null); // free practice once you're done: null, 'loading', or 'none' to practise
   const keyOf = (c) => c.tatoeba_id != null ? `t${c.tatoeba_id}` : `s${c.sentence_id}`;
   const diacOf = (c) => c.diac ?? diac[keyOf(c)];
@@ -230,6 +234,20 @@ const FlashcardsView = ({ onTutor }) => {
   });  // re-bound each render, so `swipe` and `grade` are current
 
   // Done for today: free practice over every card, which records nothing (your schedule stays as it is)
+  const stopPractice = () => setS(p => ({ ...p, cur: null, reviews: [], practice: false, done: p.practiceFrom }));
+
+  // Delete the card on screen (two clicks), then carry on with the next one
+  const deleteCard = async () => {
+    const id = ref.current?.cur?.card.sentence_id;
+    if (id == null) return;
+    if (deleteArmed !== id) return setDeleteArmed(id);
+    setDeleteArmed(null);
+    const r = await fetch(`${API_BASE}/api/delete-sentence/${id}`, { method: 'DELETE' }).catch(() => null);
+    if (!r?.ok) return setS(p => ({ ...p, error: true }));
+    setS(p => pick({ ...p, reviews: p.reviews.filter(c => c.sentence_id !== id) }));
+    refresh().catch(err => console.error('Refresh failed:', err));
+  };
+
   const startPractice = async () => {
     setPracticeState('loading');
     try {
@@ -341,7 +359,7 @@ const FlashcardsView = ({ onTutor }) => {
 
       <header className="text-center mt-2 mb-9">
         <h1 className="text-5xl md:text-7xl font-bold tracking-tight text-white tabular-nums">
-          {remaining ? <><Tick value={remaining} /> {plural(remaining, 'card')} {s.practice ? 'to practise' : 'due today'}</> : 'All done for today'}
+          {remaining ? <><Tick value={remaining} /> {plural(remaining, 'card')} {s.practice ? 'to review' : 'due today'}</> : 'All done for today'}
         </h1>
         {left > 0 && <p className="mt-4 text-2xl md:text-3xl text-slate-400">You'll learn <Tick value={left} /> new {plural(left, 'word')}</p>}
       </header>
@@ -362,8 +380,24 @@ const FlashcardsView = ({ onTutor }) => {
       {cur && !diacReady && <div className="flex justify-center py-24 text-indigo-400"><Loader className="w-8 h-8 animate-spin" aria-label="Loading" /></div>}
       {cur && diacReady && (
         <section className="max-w-3xl mx-auto mb-10 select-none">
-          <div className="h-[3px] bg-slate-800 rounded mb-3.5 overflow-hidden">
+          <div className="h-[3px] bg-slate-800 rounded mb-2 overflow-hidden">
             <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${100 * s.done / (s.done + remaining)}%` }} />
+          </div>
+          <div className="flex items-center justify-between mb-2 text-slate-500">
+            <span className="inline-flex items-center gap-1.5 text-sm" title="Flashcards for this word">
+              {target && <button onClick={() => onOpenWord?.(card.target)} title="Show on the Atlas" className="font-arabic text-lg text-amber-300 leading-none mr-1 hover:underline" dir="rtl">{target[2]}</button>}
+              <Layers className="w-4 h-4" />{card.cards} {plural(card.cards, 'card')}
+            </span>
+            <div className="flex items-center gap-1">
+              {card.sentence_id != null && (
+                <button onClick={deleteCard} onMouseLeave={() => setDeleteArmed(null)} title="Delete this card"
+                        className={`inline-flex items-center gap-1.5 p-1.5 rounded-md text-sm transition-colors ${deleteArmed === card.sentence_id ? 'bg-rose-600 text-white px-2.5' : 'hover:text-rose-400 hover:bg-slate-800'}`}>
+                  <Trash2 className="w-4 h-4" />{deleteArmed === card.sentence_id && 'Delete?'}
+                </button>
+              )}
+              <button onClick={() => onOpenWord?.(card.target)} title="More cards for this word" className="p-1.5 rounded-md hover:text-white hover:bg-slate-800"><BookPlus className="w-4 h-4" /></button>
+              {s.practice && <button onClick={stopPractice} title="Stop reviewing" aria-label="Stop reviewing" className="p-1.5 rounded-md hover:text-white hover:bg-slate-800"><X className="w-4 h-4" /></button>}
+            </div>
           </div>
           <div key={s.done} ref={cardRef} className={`fc-card relative ${s.done && s.enter ? 'fc-enter-' + s.enter : ''}`} style={{ perspective: 1400, touchAction: swipe ? 'pan-y' : undefined }}
                onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
@@ -414,7 +448,7 @@ const FlashcardsView = ({ onTutor }) => {
             <span className="min-w-[2ch] text-right font-bold text-slate-100 tabular-nums">{sliderNew}</span>
           </label>
         </div>
-        <Heatmap past={data.history} future={heatFuture} />
+        <Heatmap past={{ ...data.history, [todayKey]: (data.history[todayKey] || 0) + doneSince }} future={heatFuture} />
         <div className="grid grid-cols-3 gap-3 mt-4">
           {[[`${stats.current} ${plural(stats.current, 'day')}`, 'current streak', true], [`${stats.longest} ${plural(stats.longest, 'day')}`, 'longest streak'], [(stats.total + doneSince).toLocaleString('en-US'), 'total reviews']].map(([v, label, flame]) => (
             <div key={label} className="bg-slate-800/50 rounded-xl px-3 py-2.5">
@@ -436,7 +470,8 @@ const FlashcardsView = ({ onTutor }) => {
               </tr></thead>
               <tbody>
                 {learning.slice(0, showAll ? learning.length : 10).map(w => (
-                  <tr key={w.lemma_id} className="border-b border-slate-800">
+                  <tr key={w.lemma_id} onClick={() => onOpenWord?.(w.lemma_id)} title="Show on the Atlas"
+                      className="border-b border-slate-800 cursor-pointer hover:bg-slate-800/40">
                     <td className="py-2 px-2.5 font-mono text-xs text-slate-500">#{w.lemma_id}</td>
                     <td className="py-2 px-2.5 font-arabic text-xl" dir="rtl">{w.plaintext}</td>
                     <td className="py-2 px-2.5 text-slate-400">{firstSense(w.translation)}</td>

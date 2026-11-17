@@ -22,10 +22,15 @@ const VIEWS = [
 ];
 const CALIBRATE = { id: 'calibrate', label: 'Calibrate', icon: Gauge };
 
+// ?atlas=<lemma id> (the browser extension's Atlas button) opens the Atlas on that word
+const linkedWord = Number(new URLSearchParams(window.location.search).get('atlas')) || null;
+if (linkedWord) window.history.replaceState(null, '', window.location.pathname);  // a reload opens the app normally
+
 const App = () => {
-  const [currentView, setCurrentView] = useState('library');
+  const [currentView, setCurrentView] = useState(linkedWord ? 'atlas' : 'library');
   const [tutorAlert, setTutorAlert] = useState(false); // a tutor reply arrived while you were on another page
   const [libraryFocus, setLibraryFocus] = useState(null); // a sentence to open in the Library (the Tutor's "view flashcard")
+  const [atlasFocus, setAtlasFocus] = useState(linkedWord); // a word to open on the Atlas (from Flashcards or a link)
   const [knowsNothing, setKnowsNothing] = useState(false); // no known words yet: the Calibrate tab glows
   const tutorOpened = useRef(false), viewRef = useRef(currentView), beforeCalibrate = useRef('library');
   if (currentView === 'tutor') tutorOpened.current = true;
@@ -35,6 +40,7 @@ const App = () => {
     if (id === 'calibrate' && currentView !== 'calibrate') beforeCalibrate.current = currentView;
     if (id === 'tutor') setTutorAlert(false);
     if (id === 'library') setLibraryFocus(null); // the tab itself opens the new-flashcard creator
+    if (id === 'atlas') setAtlasFocus(null);
     setCurrentView(id);
   };
   useEffect(() => {  // checked on every page change, so it stops glowing once you've calibrated
@@ -84,13 +90,13 @@ const App = () => {
       <main className="flex-1 min-w-0 p-4 pb-24 md:p-8 overflow-y-auto max-h-screen [scrollbar-gutter:stable]">
         <div className="max-w-7xl mx-auto h-full">
           {currentView === 'library' && <LibraryView focusSentenceId={libraryFocus} />}
-          {currentView === 'flashcards' && <FlashcardsView onTutor={() => go('tutor')} />}
+          {currentView === 'flashcards' && <FlashcardsView onTutor={() => go('tutor')} onOpenWord={(id) => { setAtlasFocus(id); setCurrentView('atlas'); }} />}
           {/* Kept mounted after the first visit so the chat survives switching views */}
           {tutorOpened.current && (
             <div className={currentView === 'tutor' ? '' : 'hidden'}><TutorView onReply={() => viewRef.current !== 'tutor' && setTutorAlert(true)}
                                                                                 onViewSentence={(id) => { setLibraryFocus(id); setCurrentView('library'); }} /></div>
           )}
-          {currentView === 'atlas' && <AtlasView onCalibrate={() => go('calibrate')} />}
+          {currentView === 'atlas' && <AtlasView onCalibrate={() => go('calibrate')} focusWordId={atlasFocus} />}
           {currentView === 'calibrate' && <CalibrateView onClose={() => go(beforeCalibrate.current)} />}
         </div>
       </main>

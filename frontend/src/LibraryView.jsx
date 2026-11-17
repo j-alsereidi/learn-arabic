@@ -1100,6 +1100,12 @@ const LibraryView = ({ focusSentenceId }) => {
               ))}
             </div>
 
+            {activeTab === 'sentences' && !loading && (
+              <div className="px-4 py-2.5 text-sm text-slate-400 border-b border-slate-800">
+                <b className="text-slate-200 tabular-nums">{sentences.length.toLocaleString('en-US')}</b> {sentences.length === 1 ? 'flashcard' : 'flashcards'}
+              </div>
+            )}
+
             {/* Table Content */}
             <div className="flex-1 overflow-auto custom-scrollbar bg-slate-900/50">
               {loading && (

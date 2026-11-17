@@ -6,7 +6,7 @@ lemma with the same spelling is known (homographs are indistinguishable in runni
 """
 from flask import Blueprint, jsonify, request
 from .extensions import db
-from .models import Lemma, Sentence, TatoebaSentence, bare
+from .models import Lemma, Review, Sentence, TatoebaSentence, Word, WordInstance, bare
 from .routes import clean_punctuation, lemma_json, save_card
 
 atlas = Blueprint('atlas', __name__)
@@ -68,13 +68,31 @@ def with_dictionary(payload, sentence_lists):
     payload['dictionary'] = {l.lemma_id: [l.plaintext, l.translation] for l in Lemma.query.filter(Lemma.lemma_id.in_(ids))}
     return payload
 
-def frontier(n, known, by_lemma, deck):
-    """The top-ranked unknown lemmas that have i+1 sentences not yet in the deck, each with its options."""
-    out = []
-    for lemma_id in sorted(by_lemma):
-        options = [s for s in by_lemma[lemma_id] if s[1] not in deck]
+_by_lemma = None  # per-worker index of the static Tatoeba table: lemma id -> sentences containing it
+
+def sentences_by_lemma():
+    global _by_lemma
+    if _by_lemma is None:
+        _by_lemma = {}
+        for s in sentences():
+            for l in s[4]:
+                _by_lemma.setdefault(l, []).append(s)
+    return _by_lemma
+
+def frontier(n, known, deck, skip=frozenset()):
+    """The next n unknown lemmas by rank that have a sentence (not yet in the deck) you'll be able to read when it
+    comes up: every other unknown word in it comes earlier in this list, so you'll have learned it first. A word
+    with no i+1 sentence can still get an i+2 one this way. Options longest first; `skip`: words left out."""
+    index, chosen, out = sentences_by_lemma(), set(), []
+    for lemma_id in sorted(index):
+        if lemma_id in known or lemma_id in skip:
+            continue
+        options = [s for s in index[lemma_id]
+                   if s[1] not in deck and all(l == lemma_id or l in known or l in chosen for l in s[4])]
         if options:
+            options.sort(key=lambda s: -len(s[1]))
             out.append((lemma_id, options))
+            chosen.add(lemma_id)
             if len(out) >= n:
                 break
     lemmas = {l.lemma_id: l for l in Lemma.query.filter(Lemma.lemma_id.in_([i for i, _ in out]))}
@@ -136,26 +154,62 @@ def word(lemma_id):
 
 @atlas.route('/api/atlas/frontier')
 def frontier_route():
-    """?n= top unknown words with i+1 sentences ready, best (shortest) option first, for the slider and suggestions."""
+    """?n= next words with a sentence ready (see frontier), for the auto-create slider and the suggestions;
+    ?skip=1,2,3: words removed from them."""
     rows = lemma_rows()
-    known = known_ids(rows)
-    words = frontier(min(request.args.get('n', 12, type=int), 200), known, comprehensible(known), in_deck())
+    skip = {int(i) for i in request.args.get('skip', '').split(',') if i.isdigit()}
+    # words that already have a flashcard are covered: left out, and (learned first) usable by later words' sentences
+    assign_targets()
+    covered = {t for (t,) in db.session.query(Sentence.target_lemma_id).filter(Sentence.target_lemma_id.isnot(None))}
+    words = frontier(min(request.args.get('n', 12, type=int), 200), known_ids(rows) | covered, in_deck(), skip)
     return jsonify(with_dictionary({'words': words}, [w['sentences'] for w in words]))
+
+def assign_targets():
+    """Gives flashcards without a target word one (cards made before targets were stored, and Library sentences
+    once their words are linked): the word your reviews of it were for, else the rarest word in it you don't know yet."""
+    missing = Sentence.query.filter(Sentence.target_lemma_id.is_(None)).all()
+    if not missing:
+        return
+    reviewed = dict(db.session.query(Review.sentence_id, Review.lemma_id)
+                    .filter(Review.role.in_(['intro', 'target'])).order_by(Review.review_id).all())  # the latest wins
+    linked = {}
+    for sid, lid in (db.session.query(WordInstance.sentence_id, Word.lemma_id).join(Word, Word.word_id == WordInstance.word_id)
+                     .filter(WordInstance.sentence_id.in_([s.sentence_id for s in missing]), Word.lemma_id.isnot(None))):
+        linked.setdefault(sid, set()).add(lid)
+    rows = lemma_rows()
+    text = {i: p for i, p, _, _ in rows}
+    known_text = {p for _, p, k, _ in rows if k}  # known only: words you're still learning are fair targets
+    for s in missing:
+        target = reviewed.get(s.sentence_id)
+        if target is None:
+            unknown = [l for l in linked.get(s.sentence_id, ()) if text.get(l) not in known_text]
+            target = max(unknown) if unknown else None  # rarest: the one a sentence would have been chosen for
+        s.target_lemma_id = target
+    db.session.commit()
+
+def deck_totals():
+    """Flashcards in the deck, and the words that have one (distinct targets)."""
+    assign_targets()
+    words = db.session.query(Sentence.target_lemma_id).filter(Sentence.target_lemma_id.isnot(None)).distinct().count()
+    return {'cards': Sentence.query.count(), 'words': words}
 
 @atlas.route('/api/atlas/add', methods=['POST'])
 def add():
-    """Adds Tatoeba sentences {ids: [...]} to the deck as complete flashcards."""
-    wanted = set(request.get_json()['ids'])
+    """Adds Tatoeba sentences {items: [{id, target}]} to the deck as complete flashcards for those target words
+    (or {ids: [...]}, without targets); returns the deck totals before and after."""
+    data = request.get_json()
+    wanted = {it['id']: it.get('target') for it in data.get('items', [])} or {i: None for i in data.get('ids', [])}
     deck = in_deck()
+    before = deck_totals()
     try:
         added = 0
         for s in sentences():
             if s[0] in wanted and s[1] not in deck:
-                save_card(s[1], s[2], align(s[1], s[3]))
+                save_card(s[1], s[2], align(s[1], s[3]), target=wanted[s[0]])
                 deck.add(s[1])
                 added += 1
         db.session.commit()
-        return jsonify({'success': True, 'added': added})
+        return jsonify({'success': True, 'added': added, 'before': before, 'after': deck_totals()})
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500

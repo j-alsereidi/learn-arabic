@@ -1,0 +1,9 @@
+/* Arabic words on the page, coloured by what you know (the popups live in content.js's shadow DOM) */
+.fsr-w { cursor: pointer; border-radius: 3px; transition: background-color .1s; }
+.fsr-w.fsr-k { color: #16a34a !important; }
+.fsr-w.fsr-l { color: #d97706 !important; }
+.fsr-w.fsr-u { color: #dc2626 !important; }
+.fsr-w:hover { background-color: rgba(99, 102, 241, .14) !important; }
+.fsr-w.fsr-sel { background-color: rgba(99, 102, 241, .3) !important; }
+.fsr-w.fsr-focus { outline: 2px solid #6366f1 !important; outline-offset: 1px; background-color: rgba(99, 102, 241, .18) !important; }
+html.fsr-dragging, html.fsr-dragging * { user-select: none !important; cursor: pointer !important; }

@@ -105,11 +105,13 @@ def create_app():
     from .calibrate import calibrate
     from .atlas import atlas
     from .srs import srs
+    from .reader import reader
     app.register_blueprint(main)
     app.register_blueprint(tutor)
     app.register_blueprint(calibrate)
     app.register_blueprint(atlas)
     app.register_blueprint(srs)
+    app.register_blueprint(reader)
 
     # Initialize Database logic
     with app.app_context():

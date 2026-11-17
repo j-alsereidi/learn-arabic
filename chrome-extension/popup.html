@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; width: 280px; padding: 16px; background: #0f172a; color: #e2e8f0; font: 13px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  h1 { font-size: 15px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+  label { display: block; color: #94a3b8; margin: 12px 0 4px; }
+  input[type=url] { width: 100%; box-sizing: border-box; background: #020617; border: 1px solid #334155; border-radius: 8px; color: #e2e8f0; padding: 7px 9px; font: inherit; }
+  input[type=url]:focus { outline: none; border-color: #818cf8; }
+  .row { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+  .switch { display: flex; align-items: center; gap: 8px; cursor: pointer; margin: 0; color: #cbd5e1; }
+  .switch input { accent-color: #6366f1; width: 16px; height: 16px; }
+  button { background: #4f46e5; border: 0; color: #fff; border-radius: 8px; padding: 7px 12px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:hover { background: #6366f1; }
+  #status { margin-top: 12px; color: #94a3b8; min-height: 20px; }
+  #status.ok { color: #34d399; } #status.bad { color: #fb7185; }
+  .keys { margin-top: 12px; padding-top: 10px; border-top: 1px solid #1e293b; color: #64748b; font-size: 12px; }
+  .keys b { color: #cbd5e1; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1><img src="icons/32.png" width="20" height="20" alt="">Flashcard Studio Reader</h1>
+  <label for="server">Server</label>
+  <input id="server" type="url" placeholder="https://sdp.jasem.dev">
+  <div class="row">
+    <label class="switch"><input id="enabled" type="checkbox"> On for all pages</label>
+    <button id="rescan">Rescan page</button>
+  </div>
+  <div id="status"></div>
+  <div class="keys">
+    <b>Hover</b> a word for its meaning · <b>click</b> to switch known/unknown<br>
+    <b>Ctrl+drag</b> words to make a flashcard<br>
+    <b>Ctrl+←/→</b> next/previous unknown word · <b>Enter</b> switch it · <b>Ctrl+Enter</b> Atlas · <b>Esc</b> clear
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

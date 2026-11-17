@@ -36,6 +36,7 @@ class Sentence(db.Model):
     complete = db.Column(db.Boolean, default=False)
     length = db.Column(db.Integer)
     diac = db.Column(db.String)  # plaintext with diacritics, token for token (flashcards; filled on first use)
+    target_lemma_id = db.Column(db.Integer)  # the word this flashcard is for (see atlas.assign_targets)
 
 class CalibrationStep(db.Model):
     """One submitted calibration page, kept so it can be viewed and re-judged later."""

@@ -155,7 +155,10 @@ def tutor_flashcard():
     """Saves a tutor message as a sentence, linking each token to the lemma the tutor's analysis found."""
     data = request.get_json()
     try:
-        sentence = save_card(data['arabic'], data['english'], [(t.get('lemma') or {}).get('lemma_id') for t in data['tokens']])
+        lemmas = [t.get('lemma') for t in data['tokens'] if t.get('lemma')]
+        unknown = [l['lemma_id'] for l in lemmas if not l.get('known')]  # the message's new word
+        sentence = save_card(data['arabic'], data['english'], [(t.get('lemma') or {}).get('lemma_id') for t in data['tokens']],
+                             target=max(unknown) if unknown else None)
         db.session.commit()
         return jsonify({'success': True, 'sentence_id': sentence.sentence_id})
     except Exception as e:
