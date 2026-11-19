@@ -1,5 +1,5 @@
 // Talks to the Flashcard Studio server for the page script (content.js), so no page's own security rules get in
-// the way, and opens the Atlas in a new tab. Requests carry the website's sign-in cookie: sign in on the website.
+// the way, and opens Atlas in a new tab. Requests carry the website's sign-in cookie: sign in on the website.
 const DEFAULT_SERVER = 'https://sdp.jasem.dev';
 
 async function server() {
@@ -27,7 +27,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     return true; // reply comes asynchronously
   }
   if (msg.type === 'atlas') {
-    server().then((s) => chrome.tabs.create({ url: `${s}/?atlas=${msg.id}` }));
+    server().then((s) => chrome.tabs.create({ url: msg.id ? `${s}/?atlas=${msg.id}` : `${s}/?atlas` }));
   }
   if (msg.type === 'site') {
     server().then((s) => chrome.tabs.create({ url: s }));

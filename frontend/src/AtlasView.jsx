@@ -290,7 +290,7 @@ const SearchBox = ({ onPick }) => {
   );
 };
 
-// focusWordId: open on that word (e.g. from the Flashcards page)
+// focusWordId: open on that word (e.g. from the Flashcards page), or 'auto': at the auto-create flashcards tool
 const AtlasView = ({ onCalibrate, focusWordId }) => {
   const [summary, setSummary] = useState(null); // {states, ready, words}
   const [texts, setTexts] = useState(null);
@@ -358,6 +358,7 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
   useEffect(() => {  // arriving with a word to show (from Flashcards): focus it and bring the map into view
     if (focusWordId && summary && openedFor.current !== focusWordId) {
       openedFor.current = focusWordId;
+      if (focusWordId === 'auto') return void setTimeout(jumpToAuto, 50);  // once it has rendered
       focusWord(focusWordId);
       mapRef.current?.scrollIntoView({ block: 'start' });
     }

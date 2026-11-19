@@ -1,5 +1,5 @@
 """
-One-off import of Tatoeba's Arabic sentences (with English translations) for the Atlas's i+1 sentences.
+One-off import of Tatoeba's Arabic sentences (with English translations) for Atlas's i+1 sentences.
 
     python -m app_package.tatoeba_import <folder with the unpacked Tatoeba exports> [lemmatize|load]
 

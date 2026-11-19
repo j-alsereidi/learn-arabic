@@ -9,25 +9,35 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from .extensions import db
-from .models import Lemma, bare, nfc
+from .models import Lemma, Sentence, bare, nfc
 from .atlas import lemma_rows
 from .routes import save_card
 from .tatoeba_import import MAX_CHARS, chunks, lemmatize_batch
 
 reader = Blueprint('reader', __name__)
 
-WORD = re.compile('[ء-غـ-ْٰ-ۓ]+')  # keep in sync with chrome-extension/content.js
+# Letters and marks, Quranic ones too (not the standalone symbols ۞ ۩); keep in sync with chrome-extension/content.js
+WORD = re.compile('[\u0621-\u063A\u0640-\u065F\u0670-\u06D3\u06D6-\u06DC\u06DF-\u06E8\u06EA-\u06ED]+')
+QURANIC = str.maketrans({'\u06E1': '\u0652', 'ٱ': 'ا'})  # Uthmani script's sukun, alif wasla
+MARKS = re.compile('[\u0653-\u065F\u06D6-\u06ED]')  # what Camelira doesn't know: maddah left over, Quranic marks
 CACHE_SIZE = 20000
 _cache = OrderedDict()  # page text -> [(lex, gloss) or None per WORD], least recently used first
+
+
+def plain(word):
+    """A word in the script Camelira reads ('' for a run of marks alone, like a pause mark)."""
+    # ponytail: a dagger alif after a tatweel is a written alif (أَعْطَيْنَـٰكَ); one on a letter stays, as Camelira reads
+    # ذَٰلِكَ that way, though it then misses السَّمَٰوَٰتِ (السماوات): a word list would settle those
+    return MARKS.sub('', nfc(word).translate(QURANIC).replace('ـٰ', 'ا'))
 
 
 def analyse(texts):
     """For each text, (lex, stemgloss) or None (names, words Camelira can't analyse) per WORD; None for a text
     Camelira didn't answer. Long texts go in pieces; pieces share requests; answers are cached per text."""
     todo = [t for t in dict.fromkeys(texts) if t not in _cache and WORD.search(t)]
-    items = [((k, j), piece) for k, t in enumerate(todo) for j, piece in enumerate(chunks(t))]
+    items = [((k, j), piece) for k, t in enumerate(todo) for j, piece in enumerate(chunks(WORD.sub(lambda m: plain(m[0]), t)))]
     batches, batch, size = [], [], 0
     for item in items:
         if batch and size + len(item[1]) + 3 > MAX_CHARS:
@@ -46,7 +56,10 @@ def analyse(texts):
         tokens = [tok for j in range(n) for tok in pieces[(k, j)]]
         out, i = [], 0
         for word in WORD.findall(t):  # pair each Arabic run with the next Camelira token of the same bare form
-            found = None
+            word, found = plain(word), None
+            if not bare(word):
+                out.append(None)
+                continue
             for j in range(i, len(tokens)):
                 if bare(tokens[j][0]) == bare(word):
                     found, i = tokens[j], j + 1
@@ -75,11 +88,14 @@ def resolver():
 
 
 def lemma_info(ids):
-    """{id: [lemma, gloss, status]}: 'k' known (any same-spelled lemma known, as in the Atlas), 'l' learning, 'u' unknown."""
+    """{id: [lemma, gloss, status, cards]}: status 'k' known (any same-spelled lemma known, as in Atlas), 'l' learning,
+    'u' unknown; cards: a flashcard is for it (or a same-spelled lemma)."""
     rows = lemma_rows()
     known_text = {p for _, p, k, _ in rows if k}
     studied = {i for i, _, _, s in rows if s}
-    return {l.lemma_id: [l.plaintext, l.translation or '', 'k' if l.plaintext in known_text else 'l' if l.lemma_id in studied else 'u']
+    carded = {p for (p,) in db.session.query(Lemma.plaintext).join(Sentence, Sentence.target_lemma_id == Lemma.lemma_id).distinct()}
+    return {l.lemma_id: [l.plaintext, l.translation or '', 'k' if l.plaintext in known_text else 'l' if l.lemma_id in studied else 'u',
+                         l.plaintext in carded]
             for l in Lemma.query.filter(Lemma.lemma_id.in_(ids))}
 
 
@@ -95,6 +111,18 @@ def analyze():
     return jsonify({'words': words, 'lemmas': lemma_info(ids)})
 
 
+def per_token_lemmas(arabic, analysis):
+    """Lemma id per whitespace token of `arabic` (save_card links tokens): a token's is its first Arabic run's."""
+    lemma_id = resolver()
+    ids = [lemma_id(*a) if a else None for a in analysis]
+    out, k = [], 0
+    for token in arabic.split():
+        n = len(WORD.findall(token))
+        out.append(next((i for i in ids[k:k + n] if i), None))
+        k += n
+    return out
+
+
 @reader.route('/api/reader/flashcard', methods=['POST'])
 def flashcard():
     """{arabic, english, target}: a sentence from a web page saved as a flashcard for the target lemma."""
@@ -103,17 +131,38 @@ def flashcard():
     [analysis] = analyse([arabic])
     if analysis is None:
         return jsonify({'error': "Camelira didn't answer: try again"}), 502
-    lemma_id = resolver()
-    ids = [lemma_id(*a) if a else None for a in analysis]
-    per_token, k = [], 0
-    for token in arabic.split():  # save_card links whitespace tokens; a token's lemma is its first Arabic run's
-        n = len(WORD.findall(token))
-        per_token.append(next((i for i in ids[k:k + n] if i), None))
-        k += n
     try:
-        sentence = save_card(arabic, data.get('english', ''), per_token, target=data.get('target'))
+        sentence = save_card(arabic, data.get('english', ''), per_token_lemmas(arabic, analysis), target=data.get('target'))
         db.session.commit()
         return jsonify({'success': True, 'sentence_id': sentence.sentence_id})
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+
+@reader.route('/api/reader/flashcards', methods=['POST'])
+def flashcards():
+    """{items: [{arabic, english, target}]}: the side panel's i+1 sentences saved as flashcards. Missing English is
+    translated; sentences already in the deck are skipped. Returns {added, skipped, failed: [arabic, ...]}."""
+    from .routes import translate
+    items = [dict(it, arabic=' '.join(it['arabic'].split())) for it in request.get_json()['items'][:50]]
+    analyses = analyse([it['arabic'] for it in items])
+    have = {t for (t,) in db.session.query(Sentence.plaintext).filter(Sentence.plaintext.in_([it['arabic'] for it in items]))}
+    added, skipped, failed = 0, 0, []
+    for it, analysis in zip(items, analyses):
+        if it['arabic'] in have:
+            skipped += 1
+            continue
+        try:
+            if analysis is None:
+                raise RuntimeError("Camelira didn't answer")
+            english = (it.get('english') or '').strip() or translate(it['arabic'])
+            save_card(it['arabic'], english, per_token_lemmas(it['arabic'], analysis), target=it.get('target'))
+            db.session.commit()
+            have.add(it['arabic'])
+            added += 1
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.warning('Panel flashcard failed: %s', e)
+            failed.append(it['arabic'])
+    return jsonify({'added': added, 'skipped': skipped, 'failed': failed})

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo } from 'react';
-import { Eye, Check, X, Sparkles, CalendarDays, Layers, Flame, TriangleAlert, RotateCw, Loader, GraduationCap, Trash2, BookPlus } from 'lucide-react';
+import { Eye, Check, X, Sparkles, CalendarDays, Layers, Flame, TriangleAlert, RotateCw, Loader, GraduationCap, Trash2, BookPlus, WandSparkles } from 'lucide-react';
 import { formatGloss } from './Gloss';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
@@ -133,8 +133,9 @@ function pick(s) {  // a new word after every two reviews, or whenever reviews r
   return { ...s, ...fresh, cur: null };
 }
 
-// onTutor: go to the Tutor (offered once today's cards are done); onOpenWord: show a word on the Atlas
-const FlashcardsView = ({ onTutor, onOpenWord }) => {
+// onTutor: go to the Tutor (offered once today's cards are done); onOpenWord: show a word on Atlas;
+// onAutoCreate: Atlas's auto-create flashcards tool
+const FlashcardsView = ({ onTutor, onOpenWord, onAutoCreate }) => {
   const [data, setData] = useState(null);
   const [failed, setFailed] = useState(false);
   const [s, setS] = useState(null);
@@ -144,7 +145,7 @@ const FlashcardsView = ({ onTutor, onOpenWord }) => {
   const [draftNew, setDraftNew] = useState(null);  // the slider while it's held: only the heatmap follows it
   const [diac, setDiac] = useState({});  // card key -> diacritized sentence
   const [diacReady, setDiacReady] = useState(false);
-  const [deleteArmed, setDeleteArmed] = useState(null); // the card whose Delete was clicked once (a second click deletes)
+  const [deleteArmed, setDeleteArmed] = useState(null); // the card (keyOf) whose Delete was clicked once (a second click deletes)
   const [practiceState, setPracticeState] = useState(null); // free practice once you're done: null, 'loading', or 'none' to practise
   const keyOf = (c) => c.tatoeba_id != null ? `t${c.tatoeba_id}` : `s${c.sentence_id}`;
   const diacOf = (c) => c.diac ?? diac[keyOf(c)];
@@ -236,16 +237,34 @@ const FlashcardsView = ({ onTutor, onOpenWord }) => {
   // Done for today: free practice over every card, which records nothing (your schedule stays as it is)
   const stopPractice = () => setS(p => ({ ...p, cur: null, reviews: [], practice: false, done: p.practiceFrom }));
 
-  // Delete the card on screen (two clicks), then carry on with the next one
+  // Delete the card on screen (two clicks), then carry on with the next one. A suggested card (from Tatoeba, not
+  // in the deck yet) isn't suggested again, and doesn't count as one of today's new words.
   const deleteCard = async () => {
-    const id = ref.current?.cur?.card.sentence_id;
-    if (id == null) return;
-    if (deleteArmed !== id) return setDeleteArmed(id);
+    const card = ref.current?.cur?.card;
+    if (!card) return;
+    if (deleteArmed !== keyOf(card)) return setDeleteArmed(keyOf(card));
     setDeleteArmed(null);
-    const r = await fetch(`${API_BASE}/api/delete-sentence/${id}`, { method: 'DELETE' }).catch(() => null);
+    const r = await (card.sentence_id != null ? fetch(`${API_BASE}/api/delete-sentence/${card.sentence_id}`, { method: 'DELETE' })
+      : fetch(`${API_BASE}/api/srs/skip`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tatoeba_id: card.tatoeba_id }) })).catch(() => null);
     if (!r?.ok) return setS(p => ({ ...p, error: true }));
-    setS(p => pick({ ...p, reviews: p.reviews.filter(c => c.sentence_id !== id) }));
+    setS(p => pick(card.sentence_id != null ? { ...p, reviews: p.reviews.filter(c => c.sentence_id !== card.sentence_id) }
+      : { ...p, newCards: p.newCards.filter(c => c !== card), newShown: p.newShown - 1 }));
     refresh().catch(err => console.error('Refresh failed:', err));
+  };
+
+  // Suggested cards for the next most frequent words, on or off: the new words in the queue follow
+  const setAutoNew = async (on) => {
+    setData(d => ({ ...d, autoNew: on }));
+    try {
+      await fetch(`${API_BASE}/api/srs/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoNew: on }) });
+      const d = await fetch(`${API_BASE}/api/srs?tz=${TZ}`).then(r => r.json());
+      const fresh = d.new.filter(c => c.target !== ref.current?.cur?.card.target);  // not the card on screen again
+      await Promise.race([fetchDiac(fresh.slice(0, Math.max(0, d.newPerDay - d.newToday))), new Promise(r => setTimeout(r, 3000))]);
+      setData({ ...d, doneAtLoad: ref.current?.done ?? 0 });
+      setS(p => { const q = { ...p, newCards: fresh, newShown: 0, newToday: d.newToday }; return q.cur ? q : pick(q); });
+    } catch (err) {
+      console.error('Setting not saved:', err);
+    }
   };
 
   const startPractice = async () => {
@@ -359,9 +378,16 @@ const FlashcardsView = ({ onTutor, onOpenWord }) => {
 
       <header className="text-center mt-2 mb-9">
         <h1 className="text-5xl md:text-7xl font-bold tracking-tight text-white tabular-nums">
-          {remaining ? <><Tick value={remaining} /> {plural(remaining, 'card')} {s.practice ? 'to review' : 'due today'}</> : 'All done for today'}
+          {remaining ? <><Tick value={remaining} /> {plural(remaining, 'card')} {s.practice ? 'to review' : 'due today'}</> : s.done ? 'All done for today' : 'No flashcards to review'}
         </h1>
         {left > 0 && <p className="mt-4 text-2xl md:text-3xl text-slate-400">You'll learn <Tick value={left} /> new {plural(left, 'word')}</p>}
+        {!remaining && !s.practice && (
+          <p className="mt-4 text-2xl md:text-3xl text-slate-400">
+            {/* a span, not a <button>: buttons are always inline-block, so the phrase couldn't wrap like text */}
+            <span role="button" tabIndex={0} onClick={onAutoCreate} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAutoCreate?.(); } }}
+                  className="text-indigo-300 font-semibold cursor-pointer hover:underline">Automatically add comprehensible flashcards</span> on Atlas
+          </p>
+        )}
       </header>
 
       {!cur && diacReady && (
@@ -385,14 +411,14 @@ const FlashcardsView = ({ onTutor, onOpenWord }) => {
           </div>
           <div className="flex items-center justify-between mb-2 text-slate-500">
             <span className="inline-flex items-center gap-1.5 text-sm" title="Flashcards for this word">
-              {target && <button onClick={() => onOpenWord?.(card.target)} title="Show on the Atlas" className="font-arabic text-lg text-amber-300 leading-none mr-1 hover:underline" dir="rtl">{target[2]}</button>}
+              {target && <button onClick={() => onOpenWord?.(card.target)} title="Show on Atlas" className="font-arabic text-lg text-amber-300 leading-none mr-1 hover:underline" dir="rtl">{target[2]}</button>}
               <Layers className="w-4 h-4" />{card.cards} {plural(card.cards, 'card')}
             </span>
             <div className="flex items-center gap-1">
-              {card.sentence_id != null && (
+              {!s.practice && (
                 <button onClick={deleteCard} onMouseLeave={() => setDeleteArmed(null)} title="Delete this card"
-                        className={`inline-flex items-center gap-1.5 p-1.5 rounded-md text-sm transition-colors ${deleteArmed === card.sentence_id ? 'bg-rose-600 text-white px-2.5' : 'hover:text-rose-400 hover:bg-slate-800'}`}>
-                  <Trash2 className="w-4 h-4" />{deleteArmed === card.sentence_id && 'Delete?'}
+                        className={`inline-flex items-center gap-1.5 p-1.5 rounded-md text-sm transition-colors ${deleteArmed === keyOf(card) ? 'bg-rose-600 text-white px-2.5' : 'hover:text-rose-400 hover:bg-slate-800'}`}>
+                  <Trash2 className="w-4 h-4" />{deleteArmed === keyOf(card) && 'Delete?'}
                 </button>
               )}
               <button onClick={() => onOpenWord?.(card.target)} title="More cards for this word" className="p-1.5 rounded-md hover:text-white hover:bg-slate-800"><BookPlus className="w-4 h-4" /></button>
@@ -459,6 +485,11 @@ const FlashcardsView = ({ onTutor, onOpenWord }) => {
         </div>
       </div>
 
+      <label className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-4 flex items-center justify-between gap-4 cursor-pointer">
+        <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400"><WandSparkles className="w-4 h-4" />Suggested flashcards</span>
+        <input type="checkbox" checked={!!data.autoNew} onChange={(e) => setAutoNew(e.target.checked)} className="w-4 h-4 flex-none accent-indigo-500" />
+      </label>
+
       {learning.length > 0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
           <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3"><Layers className="w-4 h-4" />Learning</h2>
@@ -470,7 +501,7 @@ const FlashcardsView = ({ onTutor, onOpenWord }) => {
               </tr></thead>
               <tbody>
                 {learning.slice(0, showAll ? learning.length : 10).map(w => (
-                  <tr key={w.lemma_id} onClick={() => onOpenWord?.(w.lemma_id)} title="Show on the Atlas"
+                  <tr key={w.lemma_id} onClick={() => onOpenWord?.(w.lemma_id)} title="Show on Atlas"
                       className="border-b border-slate-800 cursor-pointer hover:bg-slate-800/40">
                     <td className="py-2 px-2.5 font-mono text-xs text-slate-500">#{w.lemma_id}</td>
                     <td className="py-2 px-2.5 font-arabic text-xl" dir="rtl">{w.plaintext}</td>

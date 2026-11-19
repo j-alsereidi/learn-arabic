@@ -24,17 +24,18 @@ const VIEWS = [
 ];
 const CALIBRATE = { id: 'calibrate', label: 'Calibrate', icon: Gauge };
 
-// ?atlas=<lemma id> (the browser extension's Atlas button) opens the Atlas on that word
-const linkedWord = Number(new URLSearchParams(window.location.search).get('atlas')) || null;
-if (linkedWord) window.history.replaceState(null, '', window.location.pathname);  // a reload opens the app normally
+// ?atlas=<lemma id> (the browser extension's Atlas button) opens Atlas on that word; ?atlas alone, Atlas
+const params = new URLSearchParams(window.location.search);
+const linkedWord = Number(params.get('atlas')) || null, linkedAtlas = params.has('atlas');
+if (linkedAtlas) window.history.replaceState(null, '', window.location.pathname);  // a reload opens the app normally
 
 const App = () => {
   const [user, setUser] = useState(undefined); // undefined: checking; null: a guest (data for this browser session only)
   const [signingIn, setSigningIn] = useState(false); // the sign-in dialog, over the app
-  const [currentView, setCurrentView] = useState(linkedWord ? 'atlas' : 'library');
+  const [currentView, setCurrentView] = useState(linkedAtlas ? 'atlas' : 'library');
   const [tutorAlert, setTutorAlert] = useState(false); // a tutor reply arrived while you were on another page
   const [libraryFocus, setLibraryFocus] = useState(null); // a sentence to open in the Library (the Tutor's "view flashcard")
-  const [atlasFocus, setAtlasFocus] = useState(linkedWord); // a word to open on the Atlas (from Flashcards or a link)
+  const [atlasFocus, setAtlasFocus] = useState(linkedWord); // a word to open Atlas on (from Flashcards or a link), or 'auto': its auto-create tool
   const [knowsNothing, setKnowsNothing] = useState(false); // no known words yet: the Calibrate tab glows
   const tutorOpened = useRef(false), viewRef = useRef(currentView), beforeCalibrate = useRef('library');
   if (currentView === 'tutor') tutorOpened.current = true;
@@ -114,7 +115,8 @@ const App = () => {
       <main className="flex-1 min-w-0 p-4 pt-16 pb-24 md:p-8 overflow-y-auto max-h-screen [scrollbar-gutter:stable]">
         <div className="max-w-7xl mx-auto h-full">
           {currentView === 'library' && <LibraryView focusSentenceId={libraryFocus} />}
-          {currentView === 'flashcards' && <FlashcardsView onTutor={() => go('tutor')} onOpenWord={(id) => { setAtlasFocus(id); setCurrentView('atlas'); }} />}
+          {currentView === 'flashcards' && <FlashcardsView onTutor={() => go('tutor')} onOpenWord={(id) => { setAtlasFocus(id); setCurrentView('atlas'); }}
+                                                          onAutoCreate={() => { setAtlasFocus('auto'); setCurrentView('atlas'); }} />}
           {/* Kept mounted after the first visit so the chat survives switching views */}
           {tutorOpened.current && (
             <div className={currentView === 'tutor' ? '' : 'hidden'}><TutorView onReply={() => viewRef.current !== 'tutor' && setTutorAlert(true)}

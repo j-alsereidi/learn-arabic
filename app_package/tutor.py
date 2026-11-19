@@ -104,7 +104,7 @@ def tutor_reply():
     data = request.get_json()
     history = data.get('messages', [])
 
-    # Words you're learning in Flashcards count as known, as in the Atlas
+    # Words you're learning in Flashcards count as known, as in Atlas
     known = {l.plaintext for l in Lemma.query.filter(Lemma.known | Lemma.p_learned.isnot(None))}
     candidates = (Lemma.query.filter(~Lemma.known, Lemma.p_learned.is_(None))
                   .order_by(Lemma.lemma_id).limit(NEW_WORD_CHOICES).all())

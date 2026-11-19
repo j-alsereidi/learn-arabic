@@ -10,9 +10,10 @@ R sits inside BKT's slip term: a miss long after the last review is mostly expla
 shortens S a lot but barely dents L. Words never studied (L is None, e.g. known from calibration) aren't scheduled.
 
 Cards are sentences. The card's target word gets a full observation, every other studied word in it a weaker one,
-and a word you tap as missed counts as missed. New words come from deck sentences that are i+1 for them, then
-from the Atlas's Tatoeba sentences (added to the deck when first shown).
+and a word you tap as missed counts as missed. New words come from deck sentences that are i+1 for them, then, if
+you turn it on, from Atlas's Tatoeba sentences (added to the deck when first shown; ones you delete aren't shown again).
 """
+import json
 import math
 import random
 import re
@@ -76,9 +77,17 @@ def apply(l, role, ok, now, sentence_id):
     db.session.add(Review(at=now, lemma_id=l.lemma_id, sentence_id=sentence_id, role=role, ok=ok))
 
 
+def setting(key, default):
+    s = db.session.get(Setting, key)
+    return json.loads(s.value) if s else default
+
+def save_setting(key, value):
+    s = db.session.get(Setting, key) or Setting(key=key)
+    s.value = json.dumps(value)
+    db.session.add(s)
+
 def new_per_day():
-    s = db.session.get(Setting, 'new_per_day')
-    return int(s.value) if s else 5
+    return int(setting('new_per_day', 5))
 
 def card(ar, en, ids, target, lemmas, sentence_id=None, tatoeba_id=None, cards=0):
     """A sentence as a card: words are [token, lemma id, lemma, gloss, L or None]."""
@@ -145,12 +154,12 @@ def queue():
             unknown = set(idx.values()) - known
             if len(unknown) == 1:
                 new.setdefault(unknown.pop(), ('deck', sid))
-    ready = comprehensible(known)
-    deck_text = in_deck()
-    for lid, opts in ready.items():
-        best = next((s for s in opts if s[1] not in deck_text), None)
-        if best:
-            new.setdefault(lid, ('tatoeba', best))
+    if setting('auto_new', False):  # Tatoeba cards for the next most frequent words: the longest sentence for each
+        deck_text, skipped = in_deck(), set(setting('skipped_tatoeba', []))
+        for lid, opts in comprehensible(known).items():
+            best = max((s for s in opts if s[1] not in deck_text and s[0] not in skipped), key=lambda s: len(s[1].split()), default=None)
+            if best:
+                new.setdefault(lid, ('tatoeba', best))
     new = sorted(new.items())[:MAX_NEW]
 
     ids = {i for idx in links.values() for i in idx.values()}
@@ -178,6 +187,7 @@ def queue():
         'due': [deck_card(lid, sid) for lid, sid in due],
         'new': new_cards,
         'newPerDay': new_per_day(),
+        'autoNew': setting('auto_new', False),
         'newToday': new_today,
         'history': history,
         'states': [[l.p_learned, l.stability, -days_since(l), status_of(l)] for l in studied],  # forecast input
@@ -302,12 +312,24 @@ def diac():
 
 @srs.route('/api/srs/settings', methods=['POST'])
 def settings():
-    n = max(0, min(MAX_NEW, int(request.get_json()['newPerDay'])))
-    s = db.session.get(Setting, 'new_per_day') or Setting(key='new_per_day')
-    s.value = str(n)
-    db.session.add(s)
+    """{newPerDay} and/or {autoNew}: new words per day, and whether Tatoeba cards come in for the next words."""
+    data = request.get_json()
+    if 'newPerDay' in data:
+        save_setting('new_per_day', max(0, min(MAX_NEW, int(data['newPerDay']))))
+    if 'autoNew' in data:
+        save_setting('auto_new', bool(data['autoNew']))
     db.session.commit()
-    return jsonify({'newPerDay': n})
+    return jsonify({'newPerDay': new_per_day(), 'autoNew': setting('auto_new', False)})
+
+
+@srs.route('/api/srs/skip', methods=['POST'])
+def skip():
+    """{tatoeba_id}: a suggested Tatoeba card you deleted before it joined the deck; it isn't suggested again."""
+    skipped = setting('skipped_tatoeba', [])
+    skipped.append(int(request.get_json()['tatoeba_id']))
+    save_setting('skipped_tatoeba', sorted(set(skipped)))
+    db.session.commit()
+    return jsonify({'success': True})
 
 
 if __name__ == '__main__':  # python -m app_package.srs: the model's behaviour, as asserts
