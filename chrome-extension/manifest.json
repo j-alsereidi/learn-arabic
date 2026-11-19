@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Flashcard Studio Reader",
+  "name": "ATLAS Reader",
   "version": "1.0.0",
-  "description": "Colours the Arabic on any page by what you know, with a dictionary on hover and flashcards from any sentence.",
+  "description": "ATLAS companion extension. sdp.jasem.dev",
   "permissions": ["storage"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },

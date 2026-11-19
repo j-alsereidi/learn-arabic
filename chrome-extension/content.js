@@ -1,4 +1,4 @@
-// Flashcard Studio Reader: finds the Arabic on the page, has the server lemmatize it, and colours each word by
+// ATLAS Reader: finds the Arabic on the page, has the server lemmatize it, and colours each word by
 // what you know (green known, amber learning, red unknown). Hover a word for its dictionary entry; click it to
 // switch known/unknown; Ctrl+drag across words to make a flashcard; Ctrl+←/→ walk the unknown words. A side panel
 // shows how much of the page you know, its unknown words, and its i+1 sentences to add as flashcards.
@@ -201,7 +201,7 @@
   </style>
   <aside id="side" hidden>
     <header>
-      <button class="me" title="Flashcard Studio"></button>
+      <button class="me" title="ATLAS"></button>
       <span class="grow"></span>
       <button class="icon-btn help" title="Controls" aria-label="Controls">${icon('help')}</button>
       <button class="icon-btn collapse" title="Collapse" aria-label="Collapse">${icon('close')}</button>
@@ -332,7 +332,7 @@
       load.hidden = false;
     } else if (signedOut) {
       load.className = 'panel bad link';
-      load.querySelector('.text').textContent = 'Sign in to Flashcard Studio to see your words';
+      load.querySelector('.text').textContent = 'Sign in to ATLAS to see your words';
       load.hidden = false;
     } else if (failed) {
       load.className = 'panel bad';
@@ -371,7 +371,7 @@
             }
           });
         } catch (err) {
-          console.warn('[Flashcard Studio Reader]', err.message);
+          console.warn('[ATLAS Reader]', err.message);
           batch.forEach(retry);
           if (err.signedOut) { signedOut = true; queue.length = 0; } // nothing will work until then
         }
@@ -471,7 +471,7 @@
     try {
       await api(`/api/set-known/${id}`, { known });
     } catch (err) {
-      console.warn('[Flashcard Studio Reader]', err.message);
+      console.warn('[ATLAS Reader]', err.message);
       return;
     }
     for (const other of lemmas.values()) if (other.text === l.text && other.status !== 'l') other.status = known ? 'k' : 'u';
@@ -566,7 +566,7 @@
     const me = $('#side .me'), user = session?.user;
     me.innerHTML = user?.photo ? `<img src="${esc(user.photo)}" alt="" referrerpolicy="no-referrer">`
       : user ? `<span class="initial">${esc((user.name || user.email || '?')[0].toUpperCase())}</span>` : icon('user');
-    me.title = user ? `${user.name || user.email} · Atlas` : 'Flashcard Studio';
+    me.title = user ? `${user.name || user.email} · Atlas` : 'ATLAS';
     me.onclick = () => (user ? openAtlas() : openSite());
   }
   const loadAccount = () => api('/api/auth/me').then(renderAccount, () => renderAccount(null));
@@ -706,7 +706,7 @@
         const button = e.target.closest('.tr');
         button.disabled = true;
         try { $('.list .en-in').value = (await api('/translate', { q: $('.list .ar-in').value })).translatedText || ''; }
-        catch (err) { console.warn('[Flashcard Studio Reader]', err.message); }
+        catch (err) { console.warn('[ATLAS Reader]', err.message); }
         button.disabled = false;
       }
       return;
@@ -908,7 +908,7 @@
   // ---- on and off (the popup's switch, live) ----
   function start() {
     chrome.storage.sync.get({ enabled: true, showScore: true, server: 'https://sdp.jasem.dev' }, ({ enabled, showScore, server }) => {
-      // Not on Flashcard Studio itself, which already shows what you know its own way
+      // Not on ATLAS itself, which already shows what you know its own way
       if (running || !enabled || !document.body || server.startsWith(location.origin)) return;
       running = true;
       settings.showScore = showScore;

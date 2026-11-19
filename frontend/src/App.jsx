@@ -6,8 +6,8 @@ import AtlasView from './AtlasView';
 import CalibrateView from './CalibrateView';
 import { SignInDialog, SignInButton, AccountMenu } from './AccountView';
 import { currentSession, startGuest } from './auth';
+import logo from './logo.png';
 import {
-  Languages,
   Library,
   GraduationCap,
   LayoutGrid,
@@ -89,12 +89,9 @@ const App = () => {
 
         {/* Brand */}
         <div className="flex items-center gap-3 mb-10 px-2">
-          <div className="p-2.5 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-600/20">
-            <Languages className="w-7 h-7 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-white tracking-tight leading-tight">Flashcard<br/>Studio</h1>
-          </div>
+          <img src={logo} alt="" className="w-12 h-12 rounded-xl shadow-lg shadow-indigo-600/20" />
+          {/* text-box trims the lines to the capitals and baseline, so the block is exactly 32px tall (Chrome, Edge) */}
+          <h1 className="text-[18.82px] font-bold text-white tracking-[-0.025em] leading-none whitespace-pre" style={{ textBox: 'trim-both cap alphabetic' }}>{'ATLAS\nArabic Tools'}</h1>
         </div>
 
         {/* Navigation Items */}
@@ -114,7 +111,7 @@ const App = () => {
       {/* Main Content Area */}
       <main className="flex-1 min-w-0 p-4 pt-16 pb-24 md:p-8 overflow-y-auto max-h-screen [scrollbar-gutter:stable]">
         <div className="max-w-7xl mx-auto h-full">
-          {currentView === 'library' && <LibraryView focusSentenceId={libraryFocus} />}
+          {currentView === 'library' && <LibraryView focusSentenceId={libraryFocus} onOpenWord={(id) => { setAtlasFocus(id); setCurrentView('atlas'); }} />}
           {currentView === 'flashcards' && <FlashcardsView onTutor={() => go('tutor')} onOpenWord={(id) => { setAtlasFocus(id); setCurrentView('atlas'); }}
                                                           onAutoCreate={() => { setAtlasFocus('auto'); setCurrentView('atlas'); }} />}
           {/* Kept mounted after the first visit so the chat survives switching views */}

@@ -140,13 +140,16 @@ def home():
 
 @main.route('/api/sentences')
 def api_sentences():
+    from .atlas import assign_targets  # here: atlas imports this module
+    assign_targets()
     sentences = Sentence.query.all()
     return jsonify([{
         'sentence_id': s.sentence_id,
         'plaintext': s.plaintext,
         'translation': s.translation,
         'complete': s.complete,
-        'length': s.length
+        'length': s.length,
+        'target_lemma_id': s.target_lemma_id
     } for s in sentences])
 
 def relevant_words():
@@ -470,7 +473,7 @@ def twilio_webhook():
         return reply(f'Linked to {account.email}' if account else 'That code is wrong or expired')
     account = Account.query.filter_by(phone=sender).first()
     if not account:
-        return reply("This number isn't linked to a Flashcard Studio account")
+        return reply("This number isn't linked to a ATLAS account")
     g.user_engine = user_engine(account.uid)
     try:
         new_sentence = Sentence(plaintext=body, translation="", complete=False, length=len(body.split()))

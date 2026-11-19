@@ -1,8 +1,7 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { 
   BookOpen, 
   Type, 
-  Database, 
   Trash2,
   Save,
   Languages, 
@@ -57,8 +56,9 @@ const Tooltip = ({ children, content }) => {
   );
 };
 
-const TableRow = ({ data, columns, onClick, isActive, className = "" }) => (
-  <tr 
+const TableRow = ({ data, columns, onClick, isActive, className = "", rowRef }) => (
+  <tr
+    ref={rowRef}
     onClick={onClick}
     className={`
       border-b border-slate-800/50 cursor-pointer transition-colors duration-200
@@ -76,8 +76,8 @@ const TableRow = ({ data, columns, onClick, isActive, className = "" }) => (
 
 // --- MAIN LIBRARY COMPONENT (Refactored logic from previous App) ---
 // Opens on a new-flashcard creator; picking a sentence opens it in the editor. focusSentenceId: open that one
-// (e.g. the Tutor's "view flashcard").
-const LibraryView = ({ focusSentenceId }) => {
+// (e.g. the Tutor's "view flashcard"); onOpenWord: show a lemma on Atlas.
+const LibraryView = ({ focusSentenceId, onOpenWord }) => {
   // Data State
   const [sentences, setSentences] = useState([]);
   const [words, setWords] = useState([]);
@@ -112,26 +112,10 @@ const LibraryView = ({ focusSentenceId }) => {
   const [deleteConfirmWord, setDeleteConfirmWord] = useState(false);
   const [ambiguityModal, setAmbiguityModal] = useState(null);
 
-  const [lemmaQuery, setLemmaQuery] = useState("");
-  const [lemmaResults, setLemmaResults] = useState([]);
+  const [query, setQuery] = useState(""); // the tables' search
+  const [selectedWordId, setSelectedWordId] = useState(null); // the Words table's row
 
-  const wordRefs = useRef({});
-
-  // Debounced lexicon search; cleanup drops stale responses when the query changes mid-request
-  useEffect(() => {
-    if (activeTab !== 'lemmas') return;
-    let stale = false;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/lemmas/search?q=${encodeURIComponent(lemmaQuery)}`);
-        const data = await res.json();
-        if (!stale) setLemmaResults(data);
-      } catch (err) {
-        console.error("Error searching lemmas:", err);
-      }
-    }, 250);
-    return () => { stale = true; clearTimeout(timer); };
-  }, [lemmaQuery, activeTab]);
+  const wordRefs = useRef({}), sentenceRefs = useRef({});
 
   const fetchData = useCallback(async () => {
     try {
@@ -179,6 +163,34 @@ const LibraryView = ({ focusSentenceId }) => {
 
   const selectedSentence = sentences.find(s => s.sentence_id === selectedSentenceId);
   const lemmaOf = (word) => lemmas.find(l => l.lemma_id === word?.lemma_id);
+
+  // Each flashcard's target word: the tokens linked to a word of its target lemma. targetTokens: sentence id ->
+  // Set of token indexes; targetWords: the words, each with its flashcards, by the rank of its lemma.
+  const { targetTokens, targetWords } = useMemo(() => {
+    const wordById = new Map(words.map(w => [w.word_id, w])), target = new Map(sentences.map(s => [s.sentence_id, s.target_lemma_id]));
+    const tokens = {}, byWord = new Map();
+    for (const i of wordInstances) {
+      const w = wordById.get(i.word_id), t = target.get(i.sentence_id);
+      if (!w || t == null || w.lemma_id !== t) continue;
+      (tokens[i.sentence_id] ??= new Set()).add(i.index);
+      if (!byWord.has(w.word_id)) byWord.set(w.word_id, { word: w, sentenceIds: [] });
+      const ids = byWord.get(w.word_id).sentenceIds;
+      if (!ids.includes(i.sentence_id)) ids.push(i.sentence_id);
+    }
+    const list = [...byWord.values()].sort((a, b) => a.word.lemma_id - b.word.lemma_id || a.word.plaintext.localeCompare(b.word.plaintext));
+    list.forEach(t => t.sentenceIds.sort((a, b) => a - b));
+    return { targetTokens: tokens, targetWords: list };
+  }, [sentences, words, wordInstances]);
+
+  // Search: Arabic without diacritics, English, or an ID / rank
+  const q = stripDiacritics(query.trim()).toLowerCase();
+  const matches = (...texts) => !q || texts.some(t => t != null && stripDiacritics(String(t)).toLowerCase().includes(q));
+  const visibleSentences = [...sentences].sort((a, b) => a.sentence_id - b.sentence_id)
+    .filter(s => matches(s.plaintext, s.translation, s.sentence_id));
+  const visibleWords = targetWords.filter(({ word }) => {
+    const lemma = lemmaOf(word);
+    return matches(word.plaintext, lemma?.plaintext, word.translation, formatGloss(lemma?.translation), word.lemma_id);
+  });
 
   const sentenceTokens = selectedSentence 
     ? selectedSentence.plaintext.split(' ').map((token, index) => {
@@ -260,11 +272,7 @@ const LibraryView = ({ focusSentenceId }) => {
     }
 
     if (wordData) {
-      setActiveTab('words');
-      setHighlightedWordId(wordData.word_id);
-      setTimeout(() => {
-        wordRefs.current[wordData.word_id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }, 100);
+      handleTableWordClick(wordData);
     } else {
       setIsEditingWord(true);
       setEditingWordId(null);
@@ -308,12 +316,49 @@ const LibraryView = ({ focusSentenceId }) => {
     scrollToEditor();
   };
 
-  const handleSentenceSelect = (s) => {
+  const openSentence = (id, scroll = true) => {
     setIsEditingSentence(false);
     setIsEditingWord(false);
-    setSelectedSentenceId(s.sentence_id);
-    scrollToEditor();
+    setSelectedSentenceId(id);
+    if (scroll) scrollToEditor();
   };
+  const handleSentenceSelect = (s) => openSentence(s.sentence_id);
+
+  // A word's row shows its flashcard; clicking it again, its next one
+  const handleWordRowClick = ({ word, sentenceIds }) => {
+    const k = selectedWordId === word.word_id ? sentenceIds.indexOf(selectedSentenceId) : -1;
+    setSelectedWordId(word.word_id);
+    openSentence(sentenceIds[(k + 1) % sentenceIds.length]);
+  };
+
+  // Keys: ↑ ↓ move through the table, Delete deletes the open flashcard (twice, as its button), Esc cancels that
+  useEffect(() => {
+    const onKey = (e) => {
+      if (isStaging || isEditingWord || ambiguityModal || e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
+      if (e.key === 'Escape' && deleteConfirmSentence) return setDeleteConfirmSentence(false);
+      if (e.key === 'Delete' && selectedSentenceId && !isEditingSentence) { e.preventDefault(); return handleDeleteSentenceClick(); }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      const step = (ids, at) => {
+        const k = ids.indexOf(at);
+        return ids[k < 0 ? (e.key === 'ArrowDown' ? 0 : ids.length - 1) : Math.min(ids.length - 1, Math.max(0, k + (e.key === 'ArrowDown' ? 1 : -1)))];
+      };
+      if (activeTab === 'sentences') {
+        const id = step(visibleSentences.map(s => s.sentence_id), selectedSentenceId);
+        if (id == null) return;
+        openSentence(id, false);
+        setTimeout(() => sentenceRefs.current[id]?.scrollIntoView({ block: 'nearest' }));
+      } else {
+        const id = step(visibleWords.map(t => t.word.word_id), selectedWordId);
+        if (id == null) return;
+        setSelectedWordId(id);
+        openSentence(visibleWords.find(t => t.word.word_id === id).sentenceIds[0], false);
+        setTimeout(() => wordRefs.current[id]?.scrollIntoView({ block: 'nearest' }));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });  // re-bound each render, so it sees the current lists and selection
 
   const handleTranslateSentence = async () => {
     const textToTranslate = selectedSentence && !isEditingSentence ? selectedSentence.plaintext : editingSentenceText;
@@ -821,6 +866,7 @@ const LibraryView = ({ focusSentenceId }) => {
                     const isFound = !!token.wordData;
 										const isAmbiguous = token.status === 'ambiguous';
 										const isLinked = token.status === 'linked';
+										const isTarget = !!targetTokens[selectedSentenceId]?.has(token.index);
 
 										return (
                     <Tooltip 
@@ -859,7 +905,7 @@ const LibraryView = ({ focusSentenceId }) => {
 													`
                             px-2 py-1 rounded-md transition-all duration-200 relative
                             ${isFound 
-                            ? `cursor-pointer hover:bg-indigo-500/20 hover:text-indigo-300 hover:scale-105 hover:-translate-y-1 ${highlightedWordId === token.wordData?.word_id ? 'bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/50' : ''}`
+                            ? `cursor-pointer hover:bg-indigo-500/20 hover:text-indigo-300 hover:scale-105 hover:-translate-y-1 ${highlightedWordId === token.wordData?.word_id ? 'bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/50' : isTarget ? 'text-amber-300' : ''}`
                             : 'cursor-pointer text-rose-300/80 hover:bg-rose-500/10 hover:text-rose-400 decoration-rose-500/30'
                             }
                         	`
@@ -963,7 +1009,7 @@ const LibraryView = ({ focusSentenceId }) => {
                             `}
                         >
                             {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <Languages className="w-4 h-4" />}
-                            Add Words
+                            Analyze
                         </button>
 
                         <button 
@@ -1079,7 +1125,6 @@ const LibraryView = ({ focusSentenceId }) => {
               {[
                 { id: 'sentences', label: 'Sentences', icon: Type },
                 { id: 'words', label: 'Words', icon: BookOpen },
-                { id: 'lemmas', label: 'Lemmas', icon: Database },
               ].map(tab => (
                 <button
                   key={tab.id}
@@ -1100,11 +1145,22 @@ const LibraryView = ({ focusSentenceId }) => {
               ))}
             </div>
 
-            {activeTab === 'sentences' && !loading && (
-              <div className="px-4 py-2.5 text-sm text-slate-400 border-b border-slate-800">
-                <b className="text-slate-200 tabular-nums">{sentences.length.toLocaleString('en-US')}</b> {sentences.length === 1 ? 'flashcard' : 'flashcards'}
-              </div>
-            )}
+            {!loading && (() => {
+              const [shown, total, noun] = activeTab === 'sentences' ? [visibleSentences.length, sentences.length, 'flashcard'] : [visibleWords.length, targetWords.length, 'word'];
+              return (
+                <div className="px-4 py-2.5 text-sm text-slate-400 border-b border-slate-800 flex items-center gap-4">
+                  <span className="whitespace-nowrap">
+                    <b className="text-slate-200 tabular-nums">{shown.toLocaleString('en-US')}</b>{q && ` of ${total.toLocaleString('en-US')}`} {total === 1 && !q ? noun : noun + 's'}
+                  </span>
+                  <div className="relative ml-auto w-full max-w-xs">
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search"
+                           onKeyDown={(e) => { if (e.key === 'Escape') setQuery(''); }}
+                           className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1.5 pl-9 pr-3 text-sm font-normal text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-600" />
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Table Content */}
             <div className="flex-1 overflow-auto custom-scrollbar bg-slate-900/50">
@@ -1122,21 +1178,23 @@ const LibraryView = ({ focusSentenceId }) => {
                     <table className="w-full text-left border-collapse">
                       <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
                         <tr>
-                          {['ID', 'Plaintext', 'Translation', 'Length', 'Complete'].map(h => (
+                          {['ID', 'Plaintext', 'Translation', 'Length', 'Analyzed'].map(h => (
                             <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/50">
-                        {sentences.sort((a, b) => a.sentence_id - b.sentence_id).map(s => (
-                          <TableRow 
+                        {visibleSentences.map(s => (
+                          <TableRow
                             key={s.sentence_id}
+                            rowRef={el => { sentenceRefs.current[s.sentence_id] = el; }}
                             isActive={selectedSentenceId === s.sentence_id}
                             onClick={() => handleSentenceSelect(s)}
                             data={s}
                             columns={[
                               { key: 'sentence_id', render: d => <span className="font-mono text-slate-500">#{d.sentence_id}</span> },
-                              { key: 'plaintext', isArabic: true },
+                              { key: 'plaintext', isArabic: true, render: d => d.plaintext.split(' ').map((t, i) => (
+                                  <React.Fragment key={i}>{i > 0 && ' '}{targetTokens[d.sentence_id]?.has(i) ? <span className="text-amber-300">{t}</span> : t}</React.Fragment>)) },
                               { key: 'translation' },
                               { key: 'length', render: d => <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-400">{d.length} words</span> },
                               { key: 'complete', render: d => (
@@ -1157,68 +1215,36 @@ const LibraryView = ({ focusSentenceId }) => {
                     <table className="w-full text-left border-collapse">
                       <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
                         <tr>
-                          {['ID', 'Lemma', 'Plaintext', 'Translation', 'Known'].map(h => (
+                          {['Rank', 'Lemma', 'Word', 'Translation', 'Flashcards', 'Known'].map(h => (
                             <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/50">
-                        {words.sort((a, b) => a.word_id - b.word_id).map(w => (
-                          <tr 
+                        {visibleWords.map(t => { const w = t.word, n = t.sentenceIds.length; return (
+                          <tr
                             key={w.word_id}
                             ref={el => wordRefs.current[w.word_id] = el}
-                            onClick={() => handleTableWordClick(w)}
+                            onClick={() => handleWordRowClick(t)}
                             className={`
-                              border-b border-slate-800/50 transition-colors duration-500 cursor-pointer
-                              ${highlightedWordId === w.word_id ? 'bg-indigo-500/20' : 'hover:bg-slate-800/30'}
+                              border-b border-slate-800/50 transition-colors duration-200 cursor-pointer
+                              ${selectedWordId === w.word_id ? 'bg-indigo-500/10 hover:bg-indigo-500/20' : highlightedWordId === w.word_id ? 'bg-indigo-500/20' : 'hover:bg-slate-800/50'}
                             `}
                           >
-                            <td className="p-4 text-sm font-mono text-slate-500">{w.word_id > 0 && `#${w.word_id}`}</td>
+                            <td className="p-4 text-sm font-mono text-slate-500">{w.lemma_id < 1000000 && `#${w.lemma_id}`}</td>
                             <td className="p-4 text-lg font-arabic text-indigo-400" dir="rtl">{lemmaOf(w)?.plaintext}</td>
-                            <td className="p-4 text-lg font-arabic text-slate-200" dir="rtl">{w.plaintext}</td>
+                            <td className="p-4 text-lg font-arabic" dir="rtl">
+                              <button onClick={(e) => { e.stopPropagation(); onOpenWord?.(w.lemma_id); }} title="Show on Atlas" className="text-amber-300 hover:underline">{w.plaintext}</button>
+                            </td>
                             <td className="p-4 text-sm text-slate-300">{w.translation || formatGloss(lemmaOf(w)?.translation)}</td>
+                            <td className="p-4 text-sm"><span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-400">{n} {n === 1 ? 'flashcard' : 'flashcards'}</span></td>
                             <td className="p-4 text-sm"><KnownBadge known={lemmaOf(w)?.known} /></td>
                           </tr>
-                        ))}
+                        ); })}
                       </tbody>
                     </table>
                   )}
 
-                  {/* Lemmas Table (search over the whole lexicon) */}
-                  {activeTab === 'lemmas' && (
-                    <table className="w-full text-left border-collapse">
-                      <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
-                        <tr>
-                          <th colSpan={4} className="p-3 border-b border-slate-800">
-                            <div className="relative">
-                              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                              <input
-                                value={lemmaQuery}
-                                onChange={(e) => setLemmaQuery(e.target.value)}
-                                placeholder="Search by ID, Arabic, Buckwalter or English..."
-                                className="w-full bg-slate-900 border border-slate-700 rounded-lg py-2 pl-9 pr-3 text-sm font-normal text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-600"
-                              />
-                            </div>
-                          </th>
-                        </tr>
-                        <tr>
-                          {['ID', 'Lemma', 'Translation', 'Known'].map(h => (
-                            <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/50">
-                        {lemmaResults.map(l => (
-                          <tr key={l.lemma_id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                            <td className="p-4 text-sm font-mono text-slate-500">#{l.lemma_id}</td>
-                            <td className="p-4 text-xl font-arabic text-indigo-400" dir="rtl">{l.plaintext}</td>
-                            <td className="p-4 text-sm text-slate-300">{formatGloss(l.translation)}</td>
-                            <td className="p-4 text-sm"><KnownBadge known={l.known} /></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
                 </>
               )}
             </div>
