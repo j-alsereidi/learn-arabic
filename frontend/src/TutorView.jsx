@@ -20,6 +20,9 @@ const TutorMessage = ({ message, known, onToggle, onViewSentence }) => {
   const [showEnglish, setShowEnglish] = useState(false);
   const [copied, setCopied] = useState(false);
   const [savedId, setSavedId] = useState(null); // the new flashcard's sentence, once saved
+  const [armed, setArmed] = useState(false); // several flashcards: clicked once, the next click adds them
+  // Unknown words as the chat shows them: each gets a flashcard (none: one for the message's rarest word)
+  const unknown = [...new Set(message.tokens.filter(t => t.lemma && !(known[t.lemma.lemma_id] ?? t.lemma.known)).map(t => t.lemma.lemma_id))];
 
   const copy = async () => {
     await navigator.clipboard.writeText(message.arabic);
@@ -28,10 +31,12 @@ const TutorMessage = ({ message, known, onToggle, onViewSentence }) => {
   };
 
   const saveFlashcard = async () => {
+    if (unknown.length > 1 && !armed) return setArmed(true);
+    setArmed(false);
     const res = await fetch(`${API_BASE}/api/tutor/flashcard`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(message)
+      body: JSON.stringify({ ...message, targets: unknown })
     });
     if (res.ok) setSavedId((await res.json()).sentence_id);
   };
@@ -56,7 +61,10 @@ const TutorMessage = ({ message, known, onToggle, onViewSentence }) => {
         </IconButton>
         {savedId
           ? <IconButton label="View flashcard" onClick={() => onViewSentence?.(savedId)}><SquareArrowOutUpRight className="w-4 h-4 text-emerald-400" /></IconButton>
-          : <IconButton label="Save as flashcard" onClick={saveFlashcard}><BookmarkPlus className="w-4 h-4" /></IconButton>}
+          : <button onClick={saveFlashcard} onMouseLeave={() => setArmed(false)} title={unknown.length > 1 ? `Save as ${unknown.length} flashcards` : 'Save as flashcard'}
+                    className={`inline-flex items-center gap-1.5 p-1.5 rounded-md text-sm transition-colors ${armed ? 'bg-indigo-600 text-white px-2.5' : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800'}`}>
+              <BookmarkPlus className="w-4 h-4" />{armed && `Add ${unknown.length} flashcards?`}
+            </button>}
       </div>
     </div>
   );

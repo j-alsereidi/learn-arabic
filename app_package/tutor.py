@@ -152,15 +152,15 @@ def tutor_reply():
 
 @tutor.route('/api/tutor/flashcard', methods=['POST'])
 def tutor_flashcard():
-    """Saves a tutor message as a sentence, linking each token to the lemma the tutor's analysis found."""
+    """Saves a tutor message as flashcards, linking each token to the lemma the tutor's analysis found. {targets}:
+    the message's unknown words (as the chat shows them), one flashcard each; none: one for its rarest word."""
     data = request.get_json()
     try:
-        lemmas = [t.get('lemma') for t in data['tokens'] if t.get('lemma')]
-        unknown = [l['lemma_id'] for l in lemmas if not l.get('known')]  # the message's new word
-        sentence = save_card(data['arabic'], data['english'], [(t.get('lemma') or {}).get('lemma_id') for t in data['tokens']],
-                             target=max(unknown) if unknown else None)
+        ids = [(t.get('lemma') or {}).get('lemma_id') for t in data['tokens']]
+        targets = [i for i in dict.fromkeys(data.get('targets') or []) if i in ids] or [max((i for i in ids if i), default=None)]
+        sentences = [save_card(data['arabic'], data['english'], ids, target=t) for t in targets]
         db.session.commit()
-        return jsonify({'success': True, 'sentence_id': sentence.sentence_id})
+        return jsonify({'success': True, 'sentence_id': sentences[0].sentence_id, 'sentence_ids': [s.sentence_id for s in sentences]})
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500

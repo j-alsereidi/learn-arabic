@@ -423,6 +423,7 @@ def update_sentence(sentence_id):
         old_length = sentence.length
         sentence.plaintext = data.get('plaintext', sentence.plaintext)
         sentence.translation = data.get('translation', sentence.translation)
+        sentence.target_lemma_id = data.get('target_lemma_id', sentence.target_lemma_id)
         sentence.length = len(sentence.plaintext.split())
 
         if old_length != sentence.length:

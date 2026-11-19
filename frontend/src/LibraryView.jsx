@@ -17,7 +17,9 @@ import {
   HelpCircle,
   Search,
   Link as LinkIcon,
-  BookPlus
+  BookPlus,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import Gloss, { formatGloss } from './Gloss';
 
@@ -114,6 +116,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
 
   const [query, setQuery] = useState(""); // the tables' search
   const [selectedWordId, setSelectedWordId] = useState(null); // the Words table's row
+  const [pendingTarget, setPendingTarget] = useState(null); // the open flashcard's target word, as picked (saved with Save or Enter)
 
   const wordRefs = useRef({}), sentenceRefs = useRef({});
 
@@ -250,12 +253,24 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
       })
     : [];
 
+  const targetOptions = [];
+  for (const t of sentenceTokens) {
+    const id = t.wordData?.lemma_id;
+    if (id != null && !targetOptions.some(o => o.id === id)) targetOptions.push({ id, text: t.text.replace(/[؟،!.,;:]/g, ''), lemma: lemmaOf(t.wordData) });
+  }
+  const cycleTarget = (dir) => {  // dir 1: the next word (to the left, as Arabic runs)
+    if (!targetOptions.length) return;
+    const k = targetOptions.findIndex(o => o.id === pendingTarget);
+    setPendingTarget(targetOptions[k < 0 ? 0 : (k + dir + targetOptions.length) % targetOptions.length].id);
+  };
+
   const missingWords = sentenceTokens.filter(t => t.status === 'missing').map(t => t.cleanText || t.text);
   const hasMissingWords = missingWords.length > 0;
 
   useEffect(() => {
     if (selectedSentence) {
         setTranslationInput(selectedSentence.translation);
+        setPendingTarget(selectedSentence.target_lemma_id ?? null);
         if (isEditingSentence) {
              setEditingSentenceText(selectedSentence.plaintext);
         }
@@ -331,12 +346,23 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
     openSentence(sentenceIds[(k + 1) % sentenceIds.length]);
   };
 
-  // Keys: ↑ ↓ move through the table, Delete deletes the open flashcard (twice, as its button), Esc cancels that
+  // A row brought into view by scrolling its table only (scrollIntoView would move the page too)
+  const showRow = (row) => {
+    const box = row?.closest('.overflow-auto');
+    if (!box) return;
+    const r = row.getBoundingClientRect(), b = box.getBoundingClientRect(), head = box.querySelector('thead')?.offsetHeight || 0;
+    if (r.top < b.top + head) box.scrollTop -= b.top + head - r.top;
+    else if (r.bottom > b.bottom) box.scrollTop += r.bottom - b.bottom;
+  };
+
+  // Keys: ↑ ↓ move through the table, ← → pick the open flashcard's target word and Enter saves it, Delete deletes the open flashcard (twice, as its button), Esc cancels that
   useEffect(() => {
     const onKey = (e) => {
       if (isStaging || isEditingWord || ambiguityModal || e.target.closest?.('input, textarea, select, [contenteditable="true"]')) return;
       if (e.key === 'Escape' && deleteConfirmSentence) return setDeleteConfirmSentence(false);
       if (e.key === 'Delete' && selectedSentenceId && !isEditingSentence) { e.preventDefault(); return handleDeleteSentenceClick(); }
+      if (selectedSentence && !isEditingSentence && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); return cycleTarget(e.key === 'ArrowLeft' ? 1 : -1); }
+      if (selectedSentence && !isEditingSentence && e.key === 'Enter' && !e.target.closest?.('button')) { e.preventDefault(); return handleUpdateSentence(); }
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
       e.preventDefault();
       const step = (ids, at) => {
@@ -347,13 +373,13 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
         const id = step(visibleSentences.map(s => s.sentence_id), selectedSentenceId);
         if (id == null) return;
         openSentence(id, false);
-        setTimeout(() => sentenceRefs.current[id]?.scrollIntoView({ block: 'nearest' }));
+        setTimeout(() => showRow(sentenceRefs.current[id]));
       } else {
         const id = step(visibleWords.map(t => t.word.word_id), selectedWordId);
         if (id == null) return;
         setSelectedWordId(id);
         openSentence(visibleWords.find(t => t.word.word_id === id).sentenceIds[0], false);
-        setTimeout(() => wordRefs.current[id]?.scrollIntoView({ block: 'nearest' }));
+        setTimeout(() => showRow(wordRefs.current[id]));
       }
     };
     window.addEventListener('keydown', onKey);
@@ -603,7 +629,8 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
                 plaintext: textToSend,
-                translation: translationInput
+                translation: translationInput,
+                target_lemma_id: pendingTarget
             })
         });
         if (response.ok) {
@@ -866,7 +893,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                     const isFound = !!token.wordData;
 										const isAmbiguous = token.status === 'ambiguous';
 										const isLinked = token.status === 'linked';
-										const isTarget = !!targetTokens[selectedSentenceId]?.has(token.index);
+										const isTarget = pendingTarget != null && token.wordData?.lemma_id === pendingTarget;
 
 										return (
                     <Tooltip 
@@ -995,6 +1022,30 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                         <Trash2 className="w-4 h-4" />
                         {deleteConfirmSentence ? "Are you sure?" : "Delete"}
                     </button>
+
+                    {/* Target word: ← → (or these arrows) pick one; Save or Enter keeps it */}
+                    {targetOptions.length > 0 && (() => {
+                      const cur = targetOptions.find(o => o.id === pendingTarget);
+                      const arrow = "p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800 transition-colors";
+                      return (
+                        <div className="flex flex-col items-center gap-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Target word</span>
+                        <div className="flex items-center gap-1 bg-slate-950/50 border border-slate-800 rounded-lg p-1" title="Target word">
+                          <button onClick={() => cycleTarget(1)} aria-label="Next word" className={arrow}><ChevronLeft className="w-4 h-4" /></button>
+                          <div className="min-w-[160px] max-w-[240px] px-2 text-center leading-tight">
+                            {cur ? <>
+                              <div className="flex items-baseline justify-center gap-2">
+                                <span className="font-arabic text-xl text-amber-300" dir="rtl">{cur.text}</span>
+                                {cur.id < 1000000 && <span className="font-mono text-xs text-slate-500">#{cur.id}</span>}
+                              </div>
+                              <div className="text-xs text-slate-400 truncate">{formatGloss(cur.lemma?.translation).split('; ')[0]}</div>
+                            </> : <span className="text-sm text-slate-500">No target word</span>}
+                          </div>
+                          <button onClick={() => cycleTarget(-1)} aria-label="Previous word" className={arrow}><ChevronRight className="w-4 h-4" /></button>
+                        </div>
+                        </div>
+                      );
+                    })()}
 
                     <div className="flex gap-2">
                         <button 
