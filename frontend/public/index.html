@@ -4,6 +4,17 @@
     <meta charset="utf-8" />
     <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      (function () {
+        var theme = 'light';
+        try { if (localStorage.getItem('atlas.ui.theme') === 'dark') theme = 'dark'; } catch (_) {}
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+    <style>
+      html { background: #F5F9F7; color-scheme: light; }
+      html[data-theme="dark"] { background: #101E22; color-scheme: dark; }
+    </style>
     <meta name="theme-color" content="#000000" />
     <meta
       name="description"

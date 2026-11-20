@@ -7,7 +7,7 @@ const API_BASE = process.env.REACT_APP_API_URL || '';
 // Pages of 20 lemmas: tap (or drag across) the unknown ones, then submit; the rest count as known.
 // Submitted pages form a history to browse back and forth and re-submit. Dashed tiles = not saved yet.
 // See app_package/calibrate.py.
-const CalibrateView = ({ onClose }) => {
+const CalibrateView = ({ onClose, initialEntry = false, onStatus }) => {
   const [page, setPage] = useState(null); // {step_id, steps, stratum, mode, manual, unknown, lemmas, strata}
   const [unknown, setUnknown] = useState(new Set());
   const [busy, setBusy] = useState(false);
@@ -28,6 +28,10 @@ const CalibrateView = ({ onClose }) => {
 
   const loadNext = useCallback(() => request(`/api/calibrate${sweeping.current == null ? '' : `?stratum=${sweeping.current}`}`), [request]);
   useEffect(() => { loadNext(); }, [loadNext]);
+  // Report only the current automatic flow, never infer completion from a history page.
+  useEffect(() => {
+    if (page?.step_id === null) onStatus?.(page);
+  }, [page, onStatus]);
 
   // page.step_id is null on the next (unsubmitted) page, which sits after the last submitted one
   const position = page ? (page.step_id === null ? page.steps.length : page.steps.indexOf(page.step_id)) : 0;
@@ -106,12 +110,19 @@ const CalibrateView = ({ onClose }) => {
   const saved = new Set(page.unknown);
   // Not in the database yet: everything on the next page, or a tile changed on a submitted page
   const pending = (id) => page.step_id === null || saved.has(id) !== unknown.has(id);
-  const iconButton = 'p-3 rounded-xl border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-30 disabled:hover:bg-transparent';
+  const iconButton = 'p-3 rounded-xl border border-slate-800 text-slate-400 hover:text-ink hover:bg-slate-800 transition-colors disabled:opacity-30 disabled:hover:bg-transparent';
 
   return (
-    <div className="space-y-8 select-none">
-      <div className="flex items-center gap-4">
-        <div className="flex-1 flex gap-1">
+    <div className="space-y-6 select-none">
+      <header className="calibration-intro">
+        {page.mode !== 'done' && <span className="setup-cue mb-3">{page.steps.length ? 'Continue calibration' : initialEntry ? 'Start here' : 'Vocabulary calibration'}</span>}
+        <h1 className="page-heading">Calibrate</h1>
+        <p className="page-description">Set your starting point so ATLAS can tailor your learning.</p>
+        {page.mode !== 'done' && <p className="mt-5 text-base font-medium leading-relaxed text-ink max-w-3xl">Select the words you do not know. Unselected words count as known when you save.</p>}
+      </header>
+      <div className="flex flex-wrap items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl p-4">
+        <div className="basis-full mb-1"><p className="text-sm font-medium text-slate-300">Vocabulary ranges</p><p className="text-xs text-slate-400 mt-1">Choose a range to review its words. Green shows known words; rose shows unknown words.</p></div>
+        <div className="basis-full grid grid-cols-6 sm:grid-cols-9 xl:grid-cols-[repeat(18,minmax(0,1fr))] gap-2">
           {page.strata.map((s, i) => (
             <button
               key={i}
@@ -119,20 +130,21 @@ const CalibrateView = ({ onClose }) => {
               onClick={() => { if (s.open) { sweeping.current = i; loadNext(); } else if (s.step != null) request(`/api/calibrate/steps/${s.step}`); }}
               title={`${s.lo}–${s.hi}`}
               aria-label={`Ranks ${s.lo} to ${s.hi}`}
-              className="flex-1 py-2 group"
+              className="min-h-11 py-2 group"
             >
               <div className={`h-2.5 rounded-full bg-rose-500/60 overflow-hidden flex group-hover:opacity-80 transition-opacity
                 ${i === page.stratum && page.mode !== 'done' ? 'ring-2 ring-indigo-500 ring-offset-2 ring-offset-slate-950' : ''}`}>
                 <div className="h-full bg-emerald-500/70" style={{ width: `${(100 * s.known) / s.size}%` }} />
               </div>
+              <span className="block mt-2 text-[11px] leading-tight text-slate-400 tabular-nums"><span className="block">{s.lo}</span>–{s.hi}</span>
             </button>
           ))}
         </div>
-        <button onClick={exportKnown} title="Export knownwords.txt" aria-label="Export knownwords.txt" className="p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800 transition-colors">
-          <Download className="w-5 h-5" />
+        <button onClick={exportKnown} title="Export knownwords.txt" aria-label="Export knownwords.txt" className="inline-flex items-center gap-2 min-h-11 px-3 py-2 rounded-lg text-sm text-slate-300 hover:text-ink hover:bg-slate-800 transition-colors">
+          <Download className="w-4 h-4" /><span>Export</span>
         </button>
-        <button onClick={() => fileInput.current.click()} title="Import knownwords.txt" aria-label="Import knownwords.txt" className="p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800 transition-colors">
-          <Upload className="w-5 h-5" />
+        <button onClick={() => fileInput.current.click()} title="Import knownwords.txt" aria-label="Import knownwords.txt" className="inline-flex items-center gap-2 min-h-11 px-3 py-2 rounded-lg text-sm text-slate-300 hover:text-ink hover:bg-slate-800 transition-colors">
+          <Upload className="w-4 h-4" /><span>Import</span>
         </button>
         <input ref={fileInput} type="file" accept=".txt,text/plain" onChange={importKnown} className="hidden" />
         {notFound.length > 0 && (
@@ -143,22 +155,33 @@ const CalibrateView = ({ onClose }) => {
           onMouseLeave={() => setResetArmed(false)}
           title="Reset all to unknown"
           aria-label="Reset all to unknown"
-          className={`flex items-center gap-1.5 p-1.5 rounded-md text-sm transition-colors
-            ${resetArmed ? 'bg-rose-600 text-white' : 'text-slate-500 hover:text-white hover:bg-slate-800'}`}
+          className={`flex items-center justify-center gap-2 w-32 min-h-11 px-3 py-2 rounded-lg text-sm transition-colors
+            ${resetArmed ? 'bg-rose-600 text-white' : 'text-slate-500 hover:text-ink hover:bg-slate-800'}`}
         >
-          <RotateCcw className="w-5 h-5" />
+          <RotateCcw className="w-4 h-4" /><span className={resetArmed ? 'hidden' : ''}>Reset</span>
           {resetArmed && <span className="pr-1">Reset all?</span>}
         </button>
-        <button onClick={onClose} title="Close" aria-label="Close" className="p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800 transition-colors">
+        <button onClick={onClose} title="Close" aria-label="Close" className="inline-flex items-center gap-2 min-h-11 px-3 py-2 rounded-lg text-sm text-slate-300 hover:text-ink hover:bg-slate-800 transition-colors">
           <X className="w-5 h-5" />
         </button>
       </div>
 
       {page.mode === 'done' ? (
-        <div className="flex justify-center py-24">
-          <CheckCircle2 className="w-16 h-16 text-emerald-500" />
+        <div className="bg-panel border border-line rounded-2xl p-8 sm:p-12 text-center">
+          <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-semibold text-ink">Your starting point is ready</h2>
+          <p className="mt-3 text-muted leading-relaxed">You’ve finished this calibration. You can revisit any vocabulary range above.</p>
+          <button onClick={onClose} className="inline-flex items-center justify-center gap-2 mt-6 min-h-12 px-5 rounded-xl bg-primary text-on-primary font-semibold">
+            {initialEntry ? 'Continue to Atlas' : 'Return to learning'}<ArrowRight className="w-4 h-4" />
+          </button>
         </div>
       ) : (
+        <>
+        <div className="state-legend" aria-label="Calibration legend">
+          <span><i className="legend-swatch bg-rose-500" aria-hidden="true" />Selected = unknown</span>
+          <span><i className="legend-swatch border border-control bg-panel" aria-hidden="true" />Unselected = known when saved</span>
+          <span><i className="legend-swatch border border-dashed border-control" aria-hidden="true" />Dashed border = unsaved</span>
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3" dir="rtl">
           {page.lemmas.map(l => {
             const isUnknown = unknown.has(l.lemma_id);
@@ -170,22 +193,23 @@ const CalibrateView = ({ onClose }) => {
                   onMouseEnter={() => painting !== null && mark(l.lemma_id, painting)}
                   onClick={(e) => e.detail === 0 && mark(l.lemma_id, !isUnknown)} // keyboard (Space); mouse is handled on press
                   aria-pressed={isUnknown}
-                  className={`w-full h-28 flex flex-col items-center justify-center rounded-xl border-2 transition-colors
+                  className={`calibration-tile w-full py-3 flex flex-col items-center justify-center rounded-xl border-2 transition-colors
                     ${pending(l.lemma_id) ? 'border-dashed' : ''}
                     ${isUnknown
                       ? 'bg-rose-500/15 border-rose-500/50 text-rose-300'
                       : 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'}`}
                 >
-                  <span className="font-arabic text-3xl">{l.plaintext}</span>
+                  <span className="font-arabic text-[26px] leading-[1.8]">{l.plaintext}</span>
                   <span dir="ltr" className="mt-1 px-3 max-w-full line-clamp-2 text-xs text-slate-400">{formatGloss(l.translation)}</span>
                 </button>
               </div>
             );
           })}
         </div>
+        </>
       )}
 
-      <div className="flex justify-between">
+      <div className="flex flex-wrap gap-3 justify-between">
         <div className="flex gap-2">
           <button onClick={back} disabled={position === 0 || busy} title="Previous page" aria-label="Previous page" className={iconButton}>
             <ArrowLeft className="w-5 h-5" />
@@ -210,9 +234,9 @@ const CalibrateView = ({ onClose }) => {
             disabled={busy}
             title="Save and continue"
             aria-label="Save and continue"
-            className="px-6 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-50"
+            className="flex items-center justify-center gap-2 min-h-12 px-4 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-500 text-on-primary transition-colors disabled:opacity-50"
           >
-            {busy ? <Loader className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />}
+            {busy ? <Loader className="w-5 h-5 animate-spin" /> : <Check className="w-5 h-5" />}<span>Save and continue</span>
           </button>
         )}
       </div>

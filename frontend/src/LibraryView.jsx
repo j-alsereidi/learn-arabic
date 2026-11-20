@@ -49,7 +49,7 @@ const Tooltip = ({ children, content }) => {
     <div className="relative inline-block" onMouseEnter={() => setIsVisible(true)} onMouseLeave={() => setIsVisible(false)}>
       {children}
       {isVisible && (
-        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-slate-800 text-white text-xs rounded-lg shadow-xl border border-slate-700 whitespace-nowrap z-50 animate-in fade-in zoom-in duration-200 pointer-events-none">
+        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-2 bg-slate-800 text-ink text-xs rounded-lg shadow-xl border border-slate-700 whitespace-nowrap z-50 animate-in fade-in zoom-in duration-200 pointer-events-none">
           {content}
           <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-4 border-transparent border-t-slate-800"></div>
         </div>
@@ -69,7 +69,7 @@ const TableRow = ({ data, columns, onClick, isActive, className = "", rowRef }) 
     `}
   >
     {columns.map((col, idx) => (
-      <td key={idx} className={`p-4 text-sm ${col.align === 'right' ? 'text-right' : 'text-left'} ${col.isArabic ? 'font-arabic text-lg' : 'text-slate-300'}`}>
+      <td key={idx} dir={col.isArabic ? 'rtl' : undefined} className={`p-4 ${col.align === 'right' ? 'text-right' : 'text-left'} ${col.isArabic ? 'font-arabic text-[22px] leading-relaxed' : 'text-sm text-slate-300'}`}>
         {col.render ? col.render(data) : data[col.key]}
       </td>
     ))}
@@ -675,16 +675,16 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
   const AmbiguityModal = () => {
     if (!ambiguityModal) return null;
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-overlay/60 ">
             <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl max-w-lg w-full overflow-hidden animate-in fade-in zoom-in duration-200">
                 <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
                     <div>
                         <h3 className="text-lg font-medium text-indigo-400">Multiple Matches Found</h3>
                         <p className="text-slate-400 text-sm mt-1">
-                            The word <span className="text-white font-arabic mx-1">"{ambiguityModal.tokenText}"</span> matches multiple entries.
+                            The word <span className="text-ink font-arabic mx-1">"{ambiguityModal.tokenText}"</span> matches multiple entries.
                         </p>
                     </div>
-                    <button onClick={() => setAmbiguityModal(null)} className="text-slate-500 hover:text-white">
+                    <button onClick={() => setAmbiguityModal(null)} className="text-slate-500 hover:text-ink">
                         <X className="w-5 h-5" />
                     </button>
                 </div>
@@ -698,7 +698,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                                 className="w-full flex items-center justify-between p-4 rounded-lg bg-slate-800 hover:bg-indigo-600/20 border border-slate-700 hover:border-indigo-500 transition-all group text-left"
                             >
                                 <div>
-                                    <div className="text-xl font-arabic text-white mb-1">{candidate.plaintext}</div>
+                                    <div className="text-xl font-arabic text-ink mb-1">{candidate.plaintext}</div>
                                     <div className="text-sm text-slate-400 group-hover:text-indigo-200">{candidate.translation || formatGloss(lemmaOf(candidate)?.translation)}</div>
                                 </div>
                                 <div className="text-right">
@@ -716,7 +716,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                                 setEditingWord(ambiguityModal.tokenText);
                                 setEditingWordId(null);
                             }}
-                            className="w-full py-3 px-4 rounded-lg border border-dashed border-slate-600 text-slate-400 hover:text-white hover:bg-slate-800 hover:border-slate-500 transition-all text-sm font-medium flex items-center justify-center gap-2"
+                            className="w-full py-3 px-4 rounded-lg border border-dashed border-slate-600 text-slate-400 hover:text-ink hover:bg-slate-800 hover:border-slate-500 transition-all text-sm font-medium flex items-center justify-center gap-2"
                         >
                             <CopyPlus className="w-4 h-4" />
                             None of these? Create new word
@@ -730,26 +730,26 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
 
   // Word Editor
   const WordEditor = () => (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl relative overflow-hidden group">
-       <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
+    <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 relative group">
+       <div className="hidden pointer-events-none"></div>
        <div className="relative z-10 flex flex-col gap-6">
           <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-             <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">
+             <h2 className="text-slate-100 text-base font-semibold">
                {editingWordId ? "Editing Existing Word" : "Adding New Word"}
              </h2>
-             <button onClick={() => setIsEditingWord(false)} className="text-slate-500 hover:text-white transition-colors">
+             <button onClick={() => setIsEditingWord(false)} className="text-slate-500 hover:text-ink transition-colors">
                <X className="w-5 h-5" />
              </button>
           </div>
 
           <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="text-xs text-slate-500 font-bold mb-1 block">WORD (ARABIC)</label>
                 <input 
                   value={editingWord} 
                   onChange={(e) => setEditingWord(e.target.value)}
-                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-right font-arabic text-xl text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-right font-arabic text-xl text-ink focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
               <div>
@@ -758,7 +758,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                   value={editingLemma} 
                   onChange={(e) => setEditingLemma(e.target.value)}
                   placeholder="Enter Lemma..."
-                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-right font-arabic text-xl text-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-700"
+                  className="w-full bg-slate-950/50 border border-slate-700 rounded-lg p-3 text-right font-arabic text-xl text-ink focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-500"
                 />
               </div>
             </div>
@@ -767,21 +767,21 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
               <button 
                 onClick={handleTranslateWordEditor}
                 disabled={isTranslatingWord}
-                className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-6 py-2 rounded-full text-sm font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
+                className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-on-primary px-6 py-2 rounded-full text-sm font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
               >
                 {isTranslatingWord ? <Loader className="w-4 h-4 animate-spin" /> : <ArrowDown className="w-4 h-4 group-hover:translate-y-0.5 transition-transform" />}
                 {isTranslatingWord ? "Translating..." : "Translate"}
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="text-xs text-slate-500 font-bold mb-1 block">TRANSLATION</label>
                 <input 
                   value={editingWordTrans} 
                   onChange={(e) => setEditingWordTrans(e.target.value)}
                   placeholder="Word translation..."
-                  className="w-full bg-slate-950/30 border border-slate-800 text-slate-300 text-lg rounded-lg p-3 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors placeholder:text-slate-600"
+                  className="w-full bg-slate-950/30 border border-slate-800 text-slate-300 text-lg rounded-lg p-3 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors placeholder:text-slate-400"
                 />
               </div>
               <div>
@@ -790,7 +790,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                   value={editingLemmaTrans} 
                   onChange={(e) => setEditingLemmaTrans(e.target.value)}
                   placeholder="Lemma translation..."
-                  className="w-full bg-slate-950/30 border border-slate-800 text-slate-300 text-lg rounded-lg p-3 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors placeholder:text-slate-600"
+                  className="w-full bg-slate-950/30 border border-slate-800 text-slate-300 text-lg rounded-lg p-3 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors placeholder:text-slate-400"
                 />
               </div>
             </div>
@@ -804,7 +804,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                 onMouseLeave={() => setDeleteConfirmWord(false)}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all border
                     ${deleteConfirmWord
-                      ? 'bg-rose-600 border-rose-500 text-white hover:bg-rose-500 shadow-lg shadow-rose-500/20'
+                      ? 'bg-rose-600 border-rose-500 text-white hover:bg-rose-700 shadow-lg shadow-rose-500/20'
                       : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-rose-900/30 hover:text-rose-400'
                     }
                 `}
@@ -817,14 +817,14 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
             <div className="flex gap-2 ml-auto">
               <button 
                 onClick={() => setIsEditingWord(false)}
-                className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
+                className="px-4 py-2 text-slate-400 hover:text-ink transition-colors text-sm font-medium"
               >
                 Cancel
               </button>
               <button 
                 onClick={handleConfirmWordEditor}
                 disabled={isProcessingWords}
-                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
+                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-on-primary px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm "
               >
                 {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 {isProcessingWords ? "Saving..." : "Save"}
@@ -861,34 +861,36 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
     const creating = !selectedSentence;
 
     return (
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl relative overflow-hidden group">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-4 sm:p-5 relative group">
+        <div className="hidden pointer-events-none"></div>
 
-        <div className="relative z-10 flex flex-col gap-4">
+        <div className="sentence-editor-content relative z-10 gap-4">
           <div className="flex justify-between items-center">
-             <h2 className="text-slate-400 text-sm font-medium uppercase tracking-wider">
+             <h2 className="text-slate-100 text-base font-semibold">
                {creating ? "New flashcard" : isEditingSentence ? "Editing Sentence Text" : `Editing Sentence #${selectedSentence.sentence_id}`}
              </h2>
              {!creating && (
-               <button onClick={closeSentence} title="New flashcard" aria-label="Close" className="p-1.5 -mr-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800 transition-colors">
+               <button onClick={closeSentence} title="New flashcard" aria-label="Close" className="p-1.5 -mr-1.5 rounded-md text-slate-500 hover:text-ink hover:bg-slate-800 transition-colors">
                  <X className="w-5 h-5" />
                </button>
              )}
           </div>
 
-          <div className="bg-slate-950/50 rounded-lg p-8 min-h-[160px] flex items-center justify-center border border-slate-800 shadow-inner" dir="rtl">
+          <div><label htmlFor="library-arabic" className="field-label">Arabic text</label>
+          <div className="bg-slate-950 rounded-xl p-4 min-h-[104px] flex items-center justify-center border border-slate-700" dir="rtl">
             {isEditingSentence || creating ? (
                 /* EDIT / CREATE MODE: TEXTAREA */
                 <textarea
+                    id="library-arabic"
                     value={editingSentenceText}
                     onChange={(e) => setEditingSentenceText(e.target.value)}
-                    className="w-full bg-transparent text-4xl leading-relaxed font-arabic text-slate-100 text-center outline-none border-none resize-none focus:ring-0"
+                    className="w-full h-24 bg-transparent text-[26px] leading-[1.9] font-arabic text-slate-100 text-center outline-none border-none resize-none focus:ring-0"
                     placeholder="اكتب جملة…"
                     autoFocus={!creating}
                 />
             ) : (
                 /* VIEW MODE: INTERACTIVE TOKENS */
-                <div className="flex flex-wrap gap-3 text-4xl leading-relaxed font-arabic text-slate-100">
+                <div className="flex flex-wrap gap-3 text-[26px] leading-[1.9] font-arabic text-slate-100">
                 {sentenceTokens.map((token, idx) => {
                     const isFound = !!token.wordData;
 										const isAmbiguous = token.status === 'ambiguous';
@@ -948,11 +950,16 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
             )}
           </div>
           
-          <div className="flex justify-center -my-2 z-20">
+          {!isEditingSentence && !creating && <div className="state-legend mt-3">
+            {pendingTarget != null && <span><i className="legend-swatch legend-target" aria-hidden="true" />Target word</span>}
+            {sentenceTokens.some(t => !t.wordData) && <span><i className="legend-swatch bg-rose-500" aria-hidden="true" />Rose: word needs review</span>}
+          </div>}
+          </div>
+          <div className="flex justify-start">
             <button 
               onClick={handleTranslateSentence}
               disabled={isTranslating}
-              className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-6 py-2 rounded-full text-sm font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
+              className="group flex items-center gap-2 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-on-primary px-6 py-2 rounded-full text-sm font-medium transition-all border border-slate-700 hover:border-indigo-500 shadow-sm"
             >
               {isTranslating ? <Loader className="w-4 h-4 animate-spin" /> : <ArrowDown className="w-4 h-4 group-hover:translate-y-0.5 transition-transform" />}
               {isTranslating ? "Translating..." : "Translate"}
@@ -960,10 +967,11 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
           </div>
 
           <div className="w-full">
-            <textarea
+            <label htmlFor="library-translation" className="field-label">English translation</label>
+            <textarea id="library-translation"
               value={translationInput}
               onChange={(e) => setTranslationInput(e.target.value)}
-              className="w-full h-[80px] bg-slate-950/30 border border-slate-800 text-slate-300 text-lg rounded-lg p-4 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors resize-none placeholder:text-slate-600"
+              className="w-full h-32 bg-slate-950 border border-slate-700 text-slate-100 text-base leading-relaxed rounded-xl p-3 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 transition-colors resize-none placeholder:text-slate-400"
               placeholder="Enter translation here..."
             />
           </div>
@@ -974,7 +982,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                 <button
                     onClick={handleCreateSentence}
                     disabled={!editingSentenceText.trim()}
-                    className="ml-auto flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-semibold shadow-lg shadow-indigo-500/20 transition-all active:scale-95 disabled:opacity-40 disabled:hover:bg-indigo-600"
+                    className="ml-auto flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-on-primary px-5 py-2 rounded-lg text-sm font-semibold shadow-sm transition-all  disabled:opacity-40 disabled:hover:bg-indigo-600"
                 >
                     <BookPlus className="w-4 h-4" />
                     Create flashcard
@@ -984,21 +992,21 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                 <>
                     <button 
                         onClick={() => setIsEditingSentence(false)}
-                        className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
+                        className="px-4 py-2 text-slate-400 hover:text-ink transition-colors text-sm font-medium"
                     >
                         Cancel
                     </button>
                     <div className="flex gap-2">
                         <button 
                             onClick={handleCreateSentence}
-                            className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg shadow-purple-500/20 transition-all active:scale-95"
+                            className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-all "
                         >
                             <CopyPlus className="w-4 h-4" />
                             Save New
                         </button>
                         <button 
                             onClick={handleUpdateSentence}
-                            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg shadow-emerald-500/20 transition-all active:scale-95"
+                            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-all "
                         >
                             <CheckCircle2 className="w-4 h-4" />
                             Confirm & Save
@@ -1014,7 +1022,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                         onMouseLeave={() => setDeleteConfirmSentence(false)}
                         className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all border
                             ${deleteConfirmSentence
-                                ? 'bg-rose-600 border-rose-500 text-white hover:bg-rose-500 shadow-lg shadow-rose-500/20'
+                                ? 'bg-rose-600 border-rose-500 text-white hover:bg-rose-700 shadow-lg shadow-rose-500/20'
                                 : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-rose-900/30 hover:text-rose-400'
                             }
                         `}
@@ -1026,7 +1034,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                     {/* Target word: ← → (or these arrows) pick one; Save or Enter keeps it */}
                     {targetOptions.length > 0 && (() => {
                       const cur = targetOptions.find(o => o.id === pendingTarget);
-                      const arrow = "p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800 transition-colors";
+                      const arrow = "p-2.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-800 transition-colors";
                       return (
                         <div className="flex flex-col items-center gap-1">
                         <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Target word</span>
@@ -1055,7 +1063,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                             flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors border
                             ${hasMissingWords && !isProcessingWords
                                 ? 'bg-slate-800 hover:bg-slate-700 text-indigo-300 border-slate-700 cursor-pointer shadow-lg shadow-indigo-500/10' 
-                                : 'bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed opacity-50'
+                                : 'bg-slate-900 text-slate-400 border-slate-800 cursor-not-allowed opacity-50'
                             }
                             `}
                         >
@@ -1073,7 +1081,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                         
                         <button 
                             onClick={handleUpdateSentence} // SAVE NOW OVERWRITES IN VIEW MODE
-                            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-lg shadow-indigo-500/20 active:scale-95"
+                            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-on-primary px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm "
                         >
                             <Save className="w-4 h-4" />
                             Save
@@ -1091,20 +1099,20 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
     <div className="flex flex-col h-full bg-slate-900/50">
       <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900 sticky top-0 z-20">
         <div>
-          <h3 className="text-lg font-medium text-white">Review New Words</h3>
+          <h3 className="text-lg font-medium text-ink">Review New Words</h3>
           <p className="text-slate-400 text-sm">Uncheck any incorrect suggestions before saving.</p>
         </div>
         <div className="flex gap-3">
           <button 
             onClick={() => setIsStaging(false)}
-            className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
+            className="px-4 py-2 text-slate-400 hover:text-ink transition-colors text-sm font-medium"
           >
             Cancel
           </button>
           <button 
             onClick={handleConfirmAddWords}
             disabled={isProcessingWords}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg text-sm font-medium shadow-lg shadow-emerald-500/20 transition-all active:scale-95 disabled:opacity-50"
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-2 rounded-lg text-sm font-medium shadow-sm transition-all  disabled:opacity-50"
           >
             {isProcessingWords ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
             Confirm & Save
@@ -1128,7 +1136,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
             >
               <div className={`
                 absolute top-3 right-3 w-6 h-6 rounded-full flex items-center justify-center transition-colors
-                ${item.checked ? 'bg-indigo-500 text-white' : 'bg-slate-700 text-slate-400'}
+                ${item.checked ? 'bg-indigo-500 text-on-primary' : 'bg-slate-700 text-slate-400'}
               `}>
                 <Check className="w-4 h-4" />
               </div>
@@ -1157,7 +1165,8 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
 
   // Render return for LibraryView
   return (
-    <div className="space-y-8 animate-in fade-in duration-300">
+    <div className="space-y-5">
+      <header><h1 className="page-heading">Library</h1><p className="page-description">Create, find, and manage your saved words and sentences.</p></header>
       {AmbiguityModal()}
 
       {/* Editor Section */}
@@ -1166,13 +1175,13 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
       </section>
 
       {/* Tables Section */}
-      <section className="bg-slate-900 border border-slate-800 rounded-xl shadow-xl overflow-hidden flex flex-col h-[600px] relative transition-all">
+      <section className="library-collection bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden flex flex-col h-[600px] relative">
         {isStaging ? (
           StagingArea()
         ) : (
           <>
             {/* Tabs */}
-            <div className="flex border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm">
+            <div className="flex border-b border-slate-800 bg-slate-900">
               {[
                 { id: 'sentences', label: 'Sentences', icon: Type },
                 { id: 'words', label: 'Words', icon: BookOpen },
@@ -1183,23 +1192,24 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                   disabled={loading}
                   className={`
                     flex-1 py-4 px-2 sm:px-6 text-sm font-medium flex items-center justify-center gap-2 transition-all relative
-                    ${activeTab === tab.id ? 'text-indigo-400 bg-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}
+                    ${activeTab === tab.id ? 'text-indigo-300 bg-indigo-500/10' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'}
                     ${loading ? 'opacity-50 cursor-not-allowed' : ''}
                   `}
                 >
                   <tab.icon className="w-4 h-4" />
                   {tab.label}
                   {activeTab === tab.id && (
-                    <div className="absolute bottom-0 left-0 w-full h-0.5 bg-indigo-500 shadow-[0_-2px_8px_rgba(99,102,241,0.5)]"></div>
+                    <div className="absolute bottom-0 left-0 w-full h-0.5 bg-indigo-400"></div>
                   )}
                 </button>
               ))}
             </div>
 
+            {!loading && targetWords.length > 0 && <div className="state-legend px-4 pt-3"><span><i className="legend-swatch legend-target" aria-hidden="true" />Amber: target word</span></div>}
             {!loading && (() => {
               const [shown, total, noun] = activeTab === 'sentences' ? [visibleSentences.length, sentences.length, 'flashcard'] : [visibleWords.length, targetWords.length, 'word'];
               return (
-                <div className="px-4 py-2.5 text-sm text-slate-400 border-b border-slate-800 flex items-center gap-4">
+                <div className="px-4 py-3 text-sm text-slate-400 border-b border-slate-700 flex flex-wrap items-center gap-3">
                   <span className="whitespace-nowrap">
                     <b className="text-slate-200 tabular-nums">{shown.toLocaleString('en-US')}</b>{q && ` of ${total.toLocaleString('en-US')}`} {total === 1 && !q ? noun : noun + 's'}
                   </span>
@@ -1207,7 +1217,7 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                     <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search" aria-label="Search"
                            onKeyDown={(e) => { if (e.key === 'Escape') setQuery(''); }}
-                           className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1.5 pl-9 pr-3 text-sm font-normal text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-600" />
+                           className="w-full bg-slate-900 border border-slate-700 rounded-lg py-1.5 pl-9 pr-3 text-sm font-normal text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400" />
                   </div>
                 </div>
               );
@@ -1227,14 +1237,15 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                   {/* Sentences Table */}
                   {activeTab === 'sentences' && (
                     <table className="w-full text-left border-collapse">
-                      <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
+                      <thead className="bg-slate-950 sticky top-0 z-10">
                         <tr>
                           {['ID', 'Plaintext', 'Translation', 'Length', 'Analyzed'].map(h => (
-                            <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
+                            <th key={h} className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/50">
+                        {visibleSentences.length === 0 && <tr><td colSpan={5} className="p-6 text-sm text-slate-400">No matching sentences. Create a flashcard above or adjust your search.</td></tr>}
                         {visibleSentences.map(s => (
                           <TableRow
                             key={s.sentence_id}
@@ -1250,8 +1261,8 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                               { key: 'length', render: d => <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-400">{d.length} words</span> },
                               { key: 'complete', render: d => (
                                 <div className="flex items-center gap-2">
-                                   {d.complete ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <XCircle className="w-4 h-4 text-slate-600" />}
-                                  <span className={d.complete ? "text-emerald-500" : "text-slate-600"}>{d.complete ? "Yes" : "No"}</span>
+                                   {d.complete ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <XCircle className="w-4 h-4 text-slate-400" />}
+                                  <span className={d.complete ? "text-emerald-500" : "text-slate-400"}>{d.complete ? "Yes" : "No"}</span>
                                 </div>
                               )}
                             ]}
@@ -1264,14 +1275,15 @@ const LibraryView = ({ focusSentenceId, onOpenWord }) => {
                   {/* Words Table */}
                   {activeTab === 'words' && (
                     <table className="w-full text-left border-collapse">
-                      <thead className="bg-slate-950/80 sticky top-0 z-10 backdrop-blur-md">
+                      <thead className="bg-slate-950 sticky top-0 z-10">
                         <tr>
                           {['Rank', 'Lemma', 'Word', 'Translation', 'Flashcards', 'Known'].map(h => (
-                            <th key={h} className="p-4 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-800">{h}</th>
+                            <th key={h} className="p-4 text-xs font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/50">
+                        {visibleWords.length === 0 && <tr><td colSpan={6} className="p-6 text-sm text-slate-400">No matching words. Create a flashcard above or adjust your search.</td></tr>}
                         {visibleWords.map(t => { const w = t.word, n = t.sentenceIds.length; return (
                           <tr
                             key={w.word_id}

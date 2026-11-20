@@ -22,14 +22,12 @@ export const InteractiveSentence = ({ tokens, known = {}, onToggle, className = 
                                 ${isKnown ? 'text-emerald-300' : 'text-rose-400'}
                                 ${t.lemma 
                                     ? (isKnown 
-                                        ? 'hover:text-emerald-200 drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]' 
-                                        : 'hover:text-rose-300 drop-shadow-[0_0_8px_rgba(251,113,133,0.5)]')
-                                    : 'text-rose-400/50 opacity-70'
+                                        ? 'hover:text-emerald-200'
+                                        : 'hover:text-rose-300')
+                                    : 'text-rose-400 opacity-80'
                                 }
                             `}
-                            style={t.lemma ? {
-                                filter: `drop-shadow(0 0 ${isKnown ? '1px rgba(52, 211, 153, 0.4)' : '1px rgba(251, 113, 133, 0.4)'})`
-                            } : {}}
+
                         >
                             {t.text}
                         </span>

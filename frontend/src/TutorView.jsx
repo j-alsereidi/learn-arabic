@@ -10,9 +10,9 @@ const IconButton = ({ label, onClick, disabled, children }) => (
     disabled={disabled}
     title={label}
     aria-label={label}
-    className="p-1.5 rounded-md text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition-colors disabled:hover:bg-transparent"
+    className="inline-flex items-center justify-center gap-2 min-h-10 px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors disabled:opacity-50 disabled:hover:bg-transparent"
   >
-    {children}
+    {children}<span>{label}</span>
   </button>
 );
 
@@ -42,17 +42,17 @@ const TutorMessage = ({ message, known, onToggle, onViewSentence }) => {
   };
 
   return (
-    <div className="flex flex-col items-start max-w-[85%]">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl rounded-tl-sm px-5 py-3">
+    <div className="flex flex-col items-start max-w-full sm:max-w-[90%]">
+      <div className="tutor-message bg-slate-950 border border-slate-800 rounded-2xl px-5 sm:px-7 py-6">
         <InteractiveSentence
           tokens={message.tokens}
           known={known}
           onToggle={onToggle}
-          className="gap-x-1.5 text-2xl"
+          className="gap-x-1.5 text-2xl leading-[1.9]"
         />
-        {showEnglish && <p className="mt-2 pt-2 border-t border-slate-800 text-sm text-slate-400">{message.english}</p>}
+        {showEnglish && <p className="mt-2 pt-2 border-t border-slate-800 text-base leading-relaxed text-slate-300">{message.english}</p>}
       </div>
-      <div className="flex gap-0.5 mt-1">
+      <div className="flex flex-wrap gap-1 mt-2">
         <IconButton label="Translation" onClick={() => setShowEnglish(s => !s)}>
           <Languages className={`w-4 h-4 ${showEnglish ? 'text-indigo-400' : ''}`} />
         </IconButton>
@@ -62,8 +62,8 @@ const TutorMessage = ({ message, known, onToggle, onViewSentence }) => {
         {savedId
           ? <IconButton label="View flashcard" onClick={() => onViewSentence?.(savedId)}><SquareArrowOutUpRight className="w-4 h-4 text-emerald-400" /></IconButton>
           : <button onClick={saveFlashcard} onMouseLeave={() => setArmed(false)} title={unknown.length > 1 ? `Save as ${unknown.length} flashcards` : 'Save as flashcard'}
-                    className={`inline-flex items-center gap-1.5 p-1.5 rounded-md text-sm transition-colors ${armed ? 'bg-indigo-600 text-white px-2.5' : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800'}`}>
-              <BookmarkPlus className="w-4 h-4" />{armed && `Add ${unknown.length} flashcards?`}
+                    className={`inline-flex items-center justify-center gap-1.5 min-w-[12rem] p-2.5 rounded-lg text-sm transition-colors ${armed ? 'bg-indigo-600 text-on-primary px-2.5' : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800'}`}>
+              <BookmarkPlus className="w-4 h-4" /><span className={armed ? 'hidden' : ''}>Save as flashcard</span>{armed && `Add ${unknown.length} flashcards?`}
             </button>}
       </div>
     </div>
@@ -142,19 +142,20 @@ const TutorView = ({ onReply, onViewSentence }) => {
   };
 
   return (
-    <div className="h-[calc(100dvh-7rem)] md:h-[calc(100vh-4rem)] max-w-3xl mx-auto flex flex-col">
-      <div className="flex items-center gap-4 pb-4 border-b border-slate-800">
-        <p className="flex-1 text-sm italic text-slate-400 min-h-[1.25rem]">{scenario}</p>
+    <div className="tutor-view max-w-4xl mx-auto flex flex-col">
+      <div className="flex flex-wrap items-start gap-4 pb-4 border-b border-slate-700">
+        <div className="flex-1 min-w-0"><h1 className="page-heading">Tutor</h1><p className="page-description">Practise Arabic through conversation.</p><p className="mt-3 text-sm leading-relaxed text-accent min-h-[1.25rem]">{scenario}</p></div>
         <IconButton label="New chat" onClick={() => setChatId(id => id + 1)}>
           <SquarePen className="w-5 h-5" />
         </IconButton>
       </div>
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-4 pt-16 pb-4 pr-2">
+      {messages.some(m => m.role === 'tutor') && <div className="state-legend pt-3"><span><i className="legend-swatch bg-emerald-500" aria-hidden="true" />Known word</span><span><i className="legend-swatch bg-rose-500" aria-hidden="true" />Unknown word</span></div>}
+      <div className="conversation-surface flex-1 min-h-0 overflow-y-auto custom-scrollbar flex flex-col gap-6 pt-6 pb-5 pr-2">
         {messages.map((m, i) => m.role === 'tutor'
           ? <TutorMessage key={i} message={m} known={known} onToggle={toggleKnown} onViewSentence={onViewSentence} />
           : (
-            <div key={i} dir="auto" className="self-end max-w-[85%] bg-indigo-600 text-white font-arabic text-xl rounded-2xl rounded-tr-sm px-5 py-3">
+            <div key={i} dir="auto" className="self-end max-w-[90%] break-words bg-indigo-600 text-on-primary font-arabic text-xl rounded-2xl rounded-tr-sm px-5 py-3">
               {m.text}
             </div>
           )
@@ -183,19 +184,20 @@ const TutorView = ({ onReply, onViewSentence }) => {
         <div ref={endRef} />
       </div>
 
-      <form onSubmit={send} className="flex gap-2 pt-4 border-t border-slate-800">
+      <form onSubmit={send} className="flex shrink-0 gap-2 pt-4 border-t border-slate-700">
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
           dir="auto"
           placeholder="اكتب…"
-          className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 font-arabic text-lg text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-600"
+          aria-label="Message your tutor"
+          className="flex-1 min-w-0 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 font-arabic text-[22px] leading-relaxed text-slate-100 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-500"
         />
         <button
           type="submit"
           disabled={!input.trim() || waiting}
           aria-label="Send"
-          className="px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-40 disabled:hover:bg-indigo-600"
+          className="px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-on-primary transition-colors disabled:opacity-40 disabled:hover:bg-indigo-600"
         >
           <SendHorizontal className="w-5 h-5" />
         </button>
