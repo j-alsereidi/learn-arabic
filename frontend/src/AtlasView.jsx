@@ -2,11 +2,12 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from
 import { Search, Plus, Check, Copy, Pencil, X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Maximize2, Loader, ChevronDown, BookPlus, WandSparkles, ListOrdered } from 'lucide-react';
 import Gloss, { formatGloss } from './Gloss';
 import ProgressHero from './ProgressHero';
+import { THEME_EVENT } from './theme';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
 const COLS = 200; // lemmas per heatmap row, by rank
 const MAX_ADD = 100;
-const STATE_COLOR = { k: '#34d399', u: '#fb7185' }; // known, unknown
+const STATE_COLOR = { k: 'var(--map-known)', u: 'var(--map-unknown)' }; // known, unknown
 const post = (path, body) => fetch(`${API_BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const isTyping = (el) => el.closest?.('input, textarea, select, [contenteditable="true"]');
 
@@ -51,6 +52,9 @@ const Heatmap = ({ states, texts, focus, centerOn, onPick }) => {
     const { w, h } = size.current, dpr = window.devicePixelRatio || 1;
     if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
     const ctx = cv.getContext('2d');
+    const theme = getComputedStyle(document.documentElement);
+    const knownColor = theme.getPropertyValue('--map-known').trim();
+    const unknownColor = theme.getPropertyValue('--map-unknown').trim();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     const { s, x, y } = cam.current, gap = s >= 6 ? Math.max(1, s * 0.12) : 0, pad = gap ? 0 : 0.5;
@@ -59,14 +63,14 @@ const Heatmap = ({ states, texts, focus, centerOn, onPick }) => {
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
         const i = r * COLS + c; if (i >= n) break;
-        ctx.fillStyle = states[i] === 'k' ? STATE_COLOR.k : STATE_COLOR.u;
+        ctx.fillStyle = states[i] === 'k' ? knownColor : unknownColor;
         ctx.fillRect(x + c * s + gap / 2, y + r * s + gap / 2, s - gap + pad, s - gap + pad);
       }
     }
     if (focus) {
       const i = focus - 1, cx = x + (i % COLS + 0.5) * s, cy = y + (Math.floor(i / COLS) + 0.5) * s, r = Math.max(s / 2 + 3, 8);
-      ctx.lineWidth = 5; ctx.strokeStyle = '#020617'; ctx.strokeRect(cx - r, cy - r, 2 * r, 2 * r);
-      ctx.lineWidth = 2.5; ctx.strokeStyle = '#fbbf24'; ctx.strokeRect(cx - r, cy - r, 2 * r, 2 * r);
+      ctx.lineWidth = 5; ctx.strokeStyle = theme.getPropertyValue('--map-outline').trim(); ctx.strokeRect(cx - r, cy - r, 2 * r, 2 * r);
+      ctx.lineWidth = 2.5; ctx.strokeStyle = theme.getPropertyValue('--map-focus').trim(); ctx.strokeRect(cx - r, cy - r, 2 * r, 2 * r);
     }
   }, [states, focus, n, rows]);
   const redraw = useCallback(() => { cancelAnimationFrame(frame.current); frame.current = requestAnimationFrame(draw); }, [draw]);
@@ -78,6 +82,10 @@ const Heatmap = ({ states, texts, focus, centerOn, onPick }) => {
     clamp(); draw();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(redraw, [redraw]);
+  useEffect(() => {
+    window.addEventListener(THEME_EVENT, redraw);
+    return () => window.removeEventListener(THEME_EVENT, redraw);
+  }, [redraw]);
   useEffect(() => {
     const ro = new ResizeObserver(() => {
       const w = wrap.current.clientWidth, h = wrap.current.clientHeight;
@@ -167,7 +175,7 @@ const Heatmap = ({ states, texts, focus, centerOn, onPick }) => {
   };
 
   const zoomButton = (label, Icon, fn) => (
-    <button onClick={fn} aria-label={label} title={label} className="w-9 h-9 grid place-items-center rounded-lg bg-slate-900/90 border border-slate-700 text-slate-300 hover:text-white">
+    <button onClick={fn} aria-label={label} title={label} className="w-9 h-9 grid place-items-center rounded-lg bg-slate-900/90 border border-slate-700 text-slate-300 hover:text-ink">
       <Icon className="w-4 h-4" />
     </button>
   );
@@ -185,7 +193,7 @@ const Heatmap = ({ states, texts, focus, centerOn, onPick }) => {
       {tip && (
         <div className="absolute pointer-events-none px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs shadow-xl"
              style={{ left: Math.min(tip.x + 14, size.current.w - 140), top: Math.min(tip.y + 14, size.current.h - 60) }}>
-          {texts && <div className="font-arabic text-lg text-white" dir="rtl">{texts[tip.id - 1]}</div>}
+          {texts && <div className="font-arabic text-lg text-ink" dir="rtl">{texts[tip.id - 1]}</div>}
           <span className="text-slate-500">#{tip.id.toLocaleString()}</span>
         </div>
       )}
@@ -217,7 +225,7 @@ const TotalsToast = ({ toast, onDone }) => {
       <div className="totals-toast bg-slate-900/95 border border-slate-700 rounded-2xl shadow-2xl px-10 py-7 flex gap-12 text-center">
         {[[shown.cards, 'flashcards'], [shown.words, 'words']].map(([v, label]) => (
           <div key={label}>
-            <div className="text-5xl font-bold text-white tabular-nums overflow-hidden"><span key={v} className="totals-rise">{v.toLocaleString('en-US')}</span></div>
+            <div className="text-5xl font-bold text-ink tabular-nums overflow-hidden"><span key={v} className="totals-rise">{v.toLocaleString('en-US')}</span></div>
             <div className="text-slate-400 mt-1">{label}</div>
           </div>
         ))}
@@ -241,7 +249,7 @@ const SentenceRow = ({ s, selected, onSelect, dictionary, onWord }) => {
         <div className="text-sm text-slate-400">{s.en}</div>
       </div>
       <div className="flex flex-col items-center gap-1">
-        <button onClick={copy} aria-label="Copy" title="Copy" className="p-2 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800">
+        <button onClick={copy} aria-label="Copy" title="Copy" className="p-2 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-800">
           {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
         </button>
         {s.in_deck && <Check className="w-4 h-4 text-emerald-400" aria-label="In your deck" />}
@@ -271,7 +279,8 @@ const SearchBox = ({ onPick }) => {
         ref={input} value={q} onChange={(e) => setQ(e.target.value)} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
         onKeyDown={(e) => { if (e.key === 'Enter' && hits[0]) pick(hits[0].lemma_id); if (e.key === 'Escape') setOpen(false); }}
         placeholder="ID, عربي, Buckwalter, English"
-        className="w-full bg-slate-900 border border-slate-800 rounded-xl py-3 pl-11 pr-4 text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-600"
+        aria-label="Search vocabulary by ID, Arabic, Buckwalter or English"
+        className="w-full bg-slate-900 border border-slate-800 rounded-xl py-3 pl-11 pr-4 text-slate-200 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 placeholder:text-slate-400"
       />
       {open && hits.length > 0 && (
         <div className="absolute z-30 mt-2 w-full bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
@@ -408,11 +417,12 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
   const detailKnown = detail && summary?.states[detail.lemma_id - 1] === 'k';
 
   return (
-    <div className="space-y-6">
-      <div className="pt-2 pb-6"><ProgressHero states={summary?.states} occ={occ} onCalibrate={onCalibrate} /></div>
+    <div className="space-y-5">
+      <header><h1 className="page-heading">Atlas</h1><p className="page-description">Explore Arabic words and see how your vocabulary grows.</p></header>
+      <div><ProgressHero states={summary?.states} occ={occ} onCalibrate={onCalibrate} /></div>
       <SearchBox onPick={(id) => { focusWord(id); heatRef.current?.focus({ preventScroll: true }); }} />
 
-      <div ref={mapRef} className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-6 scroll-mt-4">
+      <div ref={mapRef} className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] gap-5 scroll-mt-4">
         <div ref={heatRef} tabIndex={-1} className="relative outline-none">
           {summary
             ? <Heatmap states={summary.states} texts={texts} focus={focus} centerOn={centerOn} onPick={(id) => focusWord(id, false)} />
@@ -426,8 +436,8 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
               <ChevronDown className="w-4 h-4 text-slate-400" />
             </button>
           )}
-          <div className="flex gap-4 mt-3 text-xs text-slate-500">
-            {[['k', 'known'], ['u', 'unknown']].map(([s, label]) => (
+          <div className="state-legend mt-3" aria-label="Vocabulary map legend">
+            {[['k', 'Known'], ['u', 'Unknown']].map(([s, label]) => (
               <span key={s} className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm" style={{ background: STATE_COLOR[s] }} />{label}</span>
             ))}
           </div>
@@ -438,7 +448,7 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
             <div className="flex-1 grid place-items-center py-16 text-indigo-400"><Loader className="w-7 h-7 animate-spin" aria-label="Loading" /></div>
           ) : !detail ? (
             <div className="p-6 space-y-4 text-slate-300 leading-relaxed">
-              <h2 className="text-lg font-semibold text-white">Welcome to your Arabic Language Atlas.</h2>
+              <h2 className="text-lg font-semibold text-ink">Welcome to your Arabic Language Atlas.</h2>
               <p>This heatmap updates as your Arabic vocabulary grows. Explore the entire Arabic lexicon, or {/* a span, not a <button>: buttons are always inline-block, so the phrase couldn't wrap like text */}<span role="button" tabIndex={0} onClick={jumpToAuto}
                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jumpToAuto(); } }}
                  className="text-indigo-300 font-semibold cursor-pointer hover:underline">automatically add comprehensible flashcards</span> to your deck.</p>
@@ -449,8 +459,8 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
               <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-6 pb-2">
                 <div className="flex items-start justify-between gap-3">
                   <span className="text-xs font-mono text-slate-500 mt-2">#{detail.lemma_id.toLocaleString()}</span>
-                  <div className="font-arabic text-5xl leading-tight text-white text-right" dir="rtl">{detail.plaintext}</div>
-                  <button onClick={() => { setFocus(null); setDetailId(null); }} aria-label="Close" className="p-1.5 -mr-2 rounded-md text-slate-500 hover:text-white hover:bg-slate-800"><X className="w-4 h-4" /></button>
+                  <div className="font-arabic text-4xl leading-relaxed text-ink text-right" dir="rtl">{detail.plaintext}</div>
+                  <button onClick={() => { setFocus(null); setDetailId(null); }} aria-label="Close" className="p-1.5 -mr-2 rounded-md text-slate-500 hover:text-ink hover:bg-slate-800"><X className="w-4 h-4" /></button>
                 </div>
                 <div className="grid grid-cols-2 gap-2 my-4">
                   <button onClick={() => setKnown(detail.lemma_id, true)}
@@ -458,19 +468,20 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
                   <button onClick={() => setKnown(detail.lemma_id, false)}
                           className={`py-2 rounded-lg text-sm font-medium border ${!detailKnown ? 'bg-rose-500/15 border-rose-500/50 text-rose-300' : 'border-slate-700 text-slate-500 hover:text-slate-300'}`}>Unknown</button>
                 </div>
-                <ul className="space-y-1.5 mb-4 text-slate-200 text-base list-disc pl-5 marker:text-slate-600">
+                <ul className="space-y-1.5 mb-4 text-slate-200 text-base list-disc pl-5 marker:text-slate-400">
                   {glosses.map(g => <li key={g}>{g}</li>)}
                 </ul>
+                {detail.sentences.length > 0 && <div className="state-legend mb-3"><span><i className="legend-swatch legend-target" aria-hidden="true" />Underlined: target word</span><span className="text-amber-300">Amber: unknown words</span></div>}
                 {detail.sentences.map(s => (
                   <SentenceRow key={s.id} s={s} selected={s.id === selected} onSelect={() => setSelected(s.id)} dictionary={detail.dictionary} onWord={focusWord} />
                 ))}
                 {detail.sentences.length === 0 && <p className="py-6 text-center text-slate-400">Learn more vocabulary to unlock comprehensible sentences for this word!</p>}
-                {detail.sentences.length > 0 && <p className="py-2 text-[11px] text-slate-600">Tatoeba · CC BY 2.0 FR</p>}
+                {detail.sentences.length > 0 && <p className="py-2 text-[11px] text-slate-400">Tatoeba · CC BY 2.0 FR</p>}
               </div>
               {detail.sentences.length > 0 && (
                 <div className="p-4 border-t border-slate-800">
                   <button onClick={() => addSentences([{ id: selected, target: detail.lemma_id }])} disabled={!canCreate}
-                          className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-lg text-sm font-semibold disabled:opacity-40 disabled:hover:bg-indigo-600">
+                          className="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-on-primary py-3 rounded-lg text-sm font-semibold disabled:opacity-40 disabled:hover:bg-indigo-600">
                     {busy ? <Loader className="w-4 h-4 animate-spin" /> : selectedSentence?.in_deck ? <Check className="w-4 h-4" /> : <BookPlus className="w-4 h-4" />}
                     Create flashcard
                   </button>
@@ -482,11 +493,11 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
       </div>
 
       {/* Add N comprehensible sentences, one per top unknown word */}
-      <div ref={autoRef} key={flash} className={`bg-slate-900 border border-slate-800 rounded-xl p-4 ${flash ? 'atlas-flash' : ''}`}>
+      <div ref={autoRef} key={flash} className={`bg-slate-900 border border-slate-800 rounded-xl p-5 ${flash ? 'atlas-flash' : ''}`}>
         <style>{`
           .atlas-flash { animation: atlas-flash 1.8s ease-out; }
-          @keyframes atlas-flash { 0%, 45% { border-color: #818cf8; box-shadow: 0 0 0 4px rgba(129, 140, 248, .45); } }
-          @media (prefers-reduced-motion: reduce) { .atlas-flash { animation: none; border-color: #818cf8; } }
+          @keyframes atlas-flash { 0%, 45% { border-color: rgb(var(--focus)); box-shadow: 0 0 0 4px rgb(var(--focus) / .25); } }
+          @media (prefers-reduced-motion: reduce) { .atlas-flash { animation: none; border-color: rgb(var(--focus)); } }
         `}</style>
         <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-300 mb-3">
           <WandSparkles className="w-4 h-4 text-indigo-400" />Auto-create flashcards
@@ -499,11 +510,11 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
                  className="w-20 bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-center text-slate-200" />
           <button onClick={() => setEditing(true)} disabled={!maxN} aria-label="Edit" title="Edit"
                   className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700 disabled:opacity-40">
-            <Pencil className="w-4 h-4" />
+            <Pencil className="w-4 h-4" /><span>Edit</span>
           </button>
           <button onClick={() => addSentences(batch.map(w => ({ id: chosen(w).id, target: w.lemma_id })), true)} disabled={!maxN || busy}
-                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-40">
-            {busy ? <Loader className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} {count}
+                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-on-primary px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-40">
+            {busy ? <Loader className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Add {count}
           </button>
         </div>
       </div>
@@ -520,12 +531,12 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-2">
                 <span className="font-mono text-base font-semibold text-indigo-300 leading-none pt-0.5">#{w.lemma_id}</span>
-                <span className="font-arabic text-2xl text-amber-300 leading-snug" dir="rtl">{w.plaintext}</span>
+                <span className="font-arabic text-2xl text-amber-300 leading-relaxed" dir="rtl">{w.plaintext}</span>
               </div>
-              <div className="text-sm text-slate-300 truncate">{formatGloss(w.translation)}</div>
+              <div className="text-sm text-slate-300 break-words">{formatGloss(w.translation)}</div>
               <div className="text-xs text-slate-500 mt-0.5"><b className="text-slate-300">{w.count}</b> i+1 {w.count === 1 ? 'card' : 'cards'} found</div>
             </div>
-            <button onClick={(e) => { e.stopPropagation(); addSentences([{ id: chosen(w).id, target: w.lemma_id }]); }} aria-label="Add 1st flashcard" title="Add 1st flashcard" className="p-2 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800"><BookPlus className="w-5 h-5" /></button>
+            <button onClick={(e) => { e.stopPropagation(); addSentences([{ id: chosen(w).id, target: w.lemma_id }]); }} aria-label="Add 1st flashcard" title="Add 1st flashcard" className="p-2 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-800"><BookPlus className="w-5 h-5" /></button>
             <button onClick={(e) => { e.stopPropagation(); setKnown(w.lemma_id, true); }} aria-label="Mark known" title="Mark known" className="p-2 rounded-lg text-slate-500 hover:text-emerald-400 hover:bg-slate-800"><Check className="w-5 h-5" /></button>
           </div>
         ))}
@@ -534,13 +545,13 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
 
       {/* Edit: the sentence chosen for each word, swappable; hover a word for its dictionary entry */}
       {editing && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4"
+        <div className="fixed inset-0 z-50 bg-overlay/60  flex items-end sm:items-center justify-center p-0 sm:p-4"
              onClick={(e) => e.target === e.currentTarget && setEditing(false)}
              onKeyDown={(e) => e.key === 'Escape' && setEditing(false)}>
           <div className="bg-slate-900 border border-slate-700 rounded-t-2xl sm:rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
             <div className="flex items-center justify-between p-4 border-b border-slate-800">
               <span className="flex items-center gap-2 text-sm font-semibold text-slate-300"><WandSparkles className="w-4 h-4 text-indigo-400" />{batch.length}</span>
-              <button onClick={() => setEditing(false)} aria-label="Close" className="p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800"><X className="w-5 h-5" /></button>
+              <button onClick={() => setEditing(false)} aria-label="Close" className="p-2.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-800"><X className="w-5 h-5" /></button>
             </div>
             <div className="overflow-y-auto custom-scrollbar p-4 pb-16 space-y-2">
               {batch.map(w => {
@@ -548,16 +559,16 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
                 const swap = (d) => setChoice(c => ({ ...c, [w.lemma_id]: (k + d + w.sentences.length) % w.sentences.length }));
                 return (
                   <div key={w.lemma_id} className="grid grid-cols-[auto_auto_1fr_auto] items-center gap-3 p-3 rounded-xl border border-slate-800">
-                    <button onClick={() => removeWord(w.lemma_id)} aria-label="Remove from auto-create" title="Remove from auto-create" className="p-1.5 rounded-md text-slate-600 hover:text-rose-400 hover:bg-slate-800"><X className="w-4 h-4" /></button>
+                    <button onClick={() => removeWord(w.lemma_id)} aria-label="Remove from auto-create" title="Remove from auto-create" className="p-2.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800"><X className="w-4 h-4" /></button>
                     <span className="font-arabic text-lg text-amber-300 w-20 text-center" dir="rtl">{w.plaintext}</span>
                     <div className="min-w-0">
                       <div className="font-arabic text-lg leading-relaxed text-slate-100" dir="rtl"><Marked words={s.words} dictionary={frontier.dictionary} /></div>
                       <div className="text-xs text-slate-400">{s.en}</div>
                     </div>
                     <div className={`flex items-center gap-1 ${many ? '' : 'invisible'}`}>
-                      <button onClick={() => swap(-1)} aria-label="Previous option" className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800"><ChevronLeft className="w-4 h-4" /></button>
+                      <button onClick={() => swap(-1)} aria-label="Previous option" className="p-2.5 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800"><ChevronLeft className="w-4 h-4" /></button>
                       <span className="text-[11px] text-slate-500 w-8 text-center">{k + 1}/{w.sentences.length}</span>
-                      <button onClick={() => swap(1)} aria-label="Next option" className="p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800"><ChevronRight className="w-4 h-4" /></button>
+                      <button onClick={() => swap(1)} aria-label="Next option" className="p-2.5 rounded-lg text-slate-400 hover:text-ink hover:bg-slate-800"><ChevronRight className="w-4 h-4" /></button>
                     </div>
                   </div>
                 );
@@ -567,8 +578,8 @@ const AtlasView = ({ onCalibrate, focusWordId }) => {
               <input type="range" min={1} max={Math.max(1, maxN)} value={count} onChange={(e) => setCount(+e.target.value)}
                      aria-label="Number of words" className="flex-1 accent-indigo-500" />
               <button onClick={() => { addSentences(batch.map(w => ({ id: chosen(w).id, target: w.lemma_id })), true); setEditing(false); }} disabled={busy || !batch.length}
-                      className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-40">
-                {busy ? <Loader className="w-4 h-4 animate-spin" /> : <BookPlus className="w-4 h-4" />} {batch.length}
+                      className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-on-primary px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-40">
+                {busy ? <Loader className="w-4 h-4 animate-spin" /> : <BookPlus className="w-4 h-4" />} Add {batch.length}
               </button>
             </div>
           </div>

@@ -11,7 +11,7 @@ const GoogleLogo = () => (
   </svg>
 );
 
-const field = 'w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-slate-500 outline-none focus:border-indigo-500 transition-colors';
+const field = 'w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-ink placeholder-slate-500 outline-none focus:border-indigo-500 transition-colors';
 
 // Sign in or create an account: email and password, or Google. Closing it (X or Esc) carries on as a guest.
 export const SignInDialog = ({ onClose }) => {
@@ -40,33 +40,36 @@ export const SignInDialog = ({ onClose }) => {
   const signup = mode === 'signup';
 
   return (
-    <div className="fixed inset-0 z-[70] bg-slate-950/70 backdrop-blur-sm grid place-items-center p-4" role="dialog" aria-modal="true" aria-label={signup ? 'Create account' : 'Sign in'}>
-      <div className="relative w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-8">
-        <button onClick={onClose} aria-label="Close" className="absolute top-3 right-3 p-1.5 rounded-md text-slate-500 hover:text-white hover:bg-slate-800"><X className="w-5 h-5" /></button>
+    <div className="fixed inset-0 z-[70] bg-overlay/60 grid place-items-center overflow-y-auto p-4" role="dialog" aria-modal="true" aria-label={signup ? 'Create account' : 'Sign in'}>
+      <div className="relative w-full max-w-md my-auto bg-slate-900 border border-slate-700 rounded-2xl shadow-xl p-6 sm:p-8">
+        <button onClick={onClose} aria-label="Close" className="absolute top-3 right-3 p-2.5 rounded-lg text-slate-500 hover:text-ink hover:bg-slate-800"><X className="w-5 h-5" /></button>
         <div className="flex flex-col items-center">
-          <div className="p-2.5 bg-indigo-600 rounded-xl shadow-lg shadow-indigo-600/20"><Languages className="w-7 h-7 text-white" /></div>
-          <h1 className="mt-4 text-xl font-bold text-white tracking-tight">{signup ? 'Create account' : 'Sign in'}</h1>
+          <div className="p-2.5 bg-indigo-600 rounded-xl"><Languages className="w-7 h-7 text-on-primary" /></div>
+          <h1 className="mt-4 text-[26px] font-semibold text-ink tracking-tight">{signup ? 'Create account' : 'Sign in'}</h1>
         </div>
+        <p className="mt-3 text-sm leading-relaxed text-slate-400 text-center">Close this dialog to continue as a guest for this browser session.</p>
         <form onSubmit={submit} className="mt-6 space-y-3">
-          <input ref={emailRef} type="email" autoComplete="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} className={field} />
-          <input type="password" autoComplete={signup ? 'new-password' : 'current-password'} placeholder="Password" value={password}
+          <label htmlFor="account-email" className="field-label">Email</label>
+          <input id="account-email" ref={emailRef} type="email" autoComplete="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} className={field} />
+          <label htmlFor="account-password" className="field-label">Password</label>
+          <input id="account-password" type="password" autoComplete={signup ? 'new-password' : 'current-password'} placeholder="Password" value={password}
                  onChange={(e) => setPassword(e.target.value)} className={field} />
           {!signup && (
             <div className="text-right -mt-1">
-              <button type="button" onClick={forgot} className="text-xs text-slate-400 hover:text-white">Forgot password?</button>
+              <button type="button" onClick={forgot} className="text-xs text-slate-400 hover:text-ink">Forgot password?</button>
             </div>
           )}
           <button type="submit" disabled={!!busy}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-500 disabled:opacity-60 transition-colors">
+                  className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-indigo-600 text-on-primary font-semibold hover:bg-indigo-500 disabled:opacity-60 transition-colors">
             {busy === 'email' && <Loader className="w-5 h-5 animate-spin" />}
             {signup ? 'Create account' : 'Sign in'}
           </button>
         </form>
-        {error && <p className="mt-3 text-sm text-rose-400 text-center">{error}</p>}
-        {notice && <p className="mt-3 text-sm text-emerald-400 text-center">{notice}</p>}
+        {error && <p role="alert" className="mt-3 text-sm text-rose-400 text-center">{error}</p>}
+        {notice && <p role="status" className="mt-3 text-sm text-emerald-400 text-center">{notice}</p>}
         <div className="my-5 flex items-center gap-3 text-xs text-slate-500"><span className="flex-1 h-px bg-slate-800" />or<span className="flex-1 h-px bg-slate-800" /></div>
         <button onClick={() => run('google', signInWithGoogle)} disabled={!!busy}
-                className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl bg-slate-800 border border-slate-700 text-white font-semibold hover:bg-slate-700 disabled:opacity-60 transition-colors">
+                className="w-full flex items-center justify-center gap-3 px-4 py-3 rounded-xl bg-slate-800 border border-slate-700 text-ink font-semibold hover:bg-slate-700 disabled:opacity-60 transition-colors">
           {busy === 'google' ? <Loader className="w-5 h-5 animate-spin" /> : <GoogleLogo />}
           Continue with Google
         </button>
@@ -83,8 +86,8 @@ export const SignInDialog = ({ onClose }) => {
 // For guests, in place of the account button
 export const SignInButton = ({ onClick, compact = false }) => (
   <button onClick={onClick} aria-label="Sign in"
-          className={compact ? 'p-2 rounded-full bg-slate-800 ring-2 ring-slate-800 text-slate-300 hover:text-white hover:ring-slate-600'
-                             : 'w-full flex items-center gap-4 px-4 py-3 rounded-xl text-base font-semibold text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors'}>
+          className={compact ? 'p-3 rounded-full bg-slate-800 ring-2 ring-slate-800 text-slate-300 hover:text-ink hover:ring-slate-600'
+                             : 'w-full flex items-center gap-4 px-4 py-3 rounded-xl text-base font-semibold text-slate-400 hover:text-ink hover:bg-slate-800/50 transition-colors'}>
     <LogIn className="w-5 h-5" />
     {!compact && 'Sign in'}
   </button>
@@ -92,7 +95,7 @@ export const SignInButton = ({ onClick, compact = false }) => (
 
 const Avatar = ({ user, size = 'w-8 h-8' }) => user.photo
   ? <img src={user.photo} alt="" referrerPolicy="no-referrer" className={`${size} rounded-full`} />
-  : <span className={`${size} rounded-full bg-indigo-600 text-white grid place-items-center text-sm font-semibold`}>{(user.name || user.email || '?')[0].toUpperCase()}</span>;
+  : <span className={`${size} rounded-full bg-indigo-600 text-on-primary grid place-items-center text-sm font-semibold`}>{(user.name || user.email || '?')[0].toUpperCase()}</span>;
 
 // Texting sentences to the Library: link a phone by texting a code to the Twilio number
 const SmsSetting = ({ user, onUser }) => {
@@ -113,8 +116,8 @@ const SmsSetting = ({ user, onUser }) => {
       {pending ? (
         <div className="text-sm text-slate-300">
           <div className="flex items-start justify-between gap-2">
-            <span>Text this code to <span className="font-mono text-white">{pending.number}</span></span>
-            <button onClick={() => setPending(null)} aria-label="Cancel" className="p-0.5 rounded text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
+            <span>Text this code to <span className="font-mono text-ink">{pending.number}</span></span>
+            <button onClick={() => setPending(null)} aria-label="Cancel" className="p-0.5 rounded text-slate-500 hover:text-ink"><X className="w-4 h-4" /></button>
           </div>
           <div className="mt-2 font-mono text-2xl tracking-[0.3em] text-indigo-300">{pending.code}</div>
           <div className="mt-1 flex items-center gap-2 text-xs text-slate-500"><Loader className="w-3 h-3 animate-spin" />Waiting for your text</div>
@@ -126,7 +129,7 @@ const SmsSetting = ({ user, onUser }) => {
         </div>
       ) : (
         <button onClick={async () => setPending(await phoneCode())}
-                className="flex items-center gap-2 text-sm text-slate-300 hover:text-white">
+                className="flex items-center gap-2 text-sm text-slate-300 hover:text-ink">
           <MessageSquare className="w-4 h-4" />Link a phone
         </button>
       )}
@@ -151,7 +154,7 @@ export const AccountMenu = ({ user, onUser, up = true, compact = false }) => {
     <div ref={ref} className="relative">
       <button onClick={() => setOpen(o => !o)} aria-label="Account" aria-expanded={open}
               className={compact ? 'rounded-full ring-2 ring-slate-800 hover:ring-slate-600'
-                                 : 'w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/50 transition-colors'}>
+                                 : 'w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:text-ink hover:bg-slate-800/50 transition-colors'}>
         <Avatar user={user} />
         {!compact && <span className="min-w-0 truncate text-sm font-semibold">{user.name || user.email}</span>}
       </button>
@@ -161,13 +164,13 @@ export const AccountMenu = ({ user, onUser, up = true, compact = false }) => {
           <div className="px-4 py-3 flex items-center gap-3">
             <Avatar user={user} size="w-10 h-10" />
             <div className="min-w-0">
-              {user.name && <div className="text-sm font-semibold text-white truncate">{user.name}</div>}
+              {user.name && <div className="text-sm font-semibold text-ink truncate">{user.name}</div>}
               <div className="text-xs text-slate-400 truncate">{user.email}</div>
             </div>
           </div>
           {user.twilio_number && <SmsSetting user={user} onUser={onUser} />}
           <button onClick={async () => { await signOut(); window.location.reload(); }}
-                  className="w-full flex items-center gap-3 px-4 py-3 border-t border-slate-800 text-sm text-slate-300 hover:text-white hover:bg-slate-800/50">
+                  className="w-full flex items-center gap-3 px-4 py-3 border-t border-slate-800 text-sm text-slate-300 hover:text-ink hover:bg-slate-800/50">
             <LogOut className="w-4 h-4" />Sign out
           </button>
         </div>

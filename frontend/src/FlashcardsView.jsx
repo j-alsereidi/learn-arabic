@@ -50,8 +50,8 @@ const Tick = ({ value }) => {
   return <span key={n} className={n ? 'fc-tick' : 'inline-block'}>{value}</span>;
 };
 
-// ---- calendar heatmap: past reviews in green, the forecast in indigo ----
-const PAST = ['#1f8a57', '#27ad6c', '#34d399', '#86efac'], FUTURE = ['#1c2350', '#2c3577', '#4a52b8', '#818cf8'];
+// ---- calendar heatmap: past reviews in green, the forecast in blue ----
+const PAST = ['var(--past-1)', 'var(--past-2)', 'var(--past-3)', 'var(--past-4)'], FUTURE = ['var(--future-1)', 'var(--future-2)', 'var(--future-3)', 'var(--future-4)'];
 const Heatmap = ({ past, future }) => {
   const ref = useRef(null), [width, setWidth] = useState(800), [tip, setTip] = useState(null);
   useLayoutEffect(() => {
@@ -82,9 +82,9 @@ const Heatmap = ({ past, future }) => {
       const done = off <= 0 ? past[localDay(dateAt(off))] || 0 : 0;
       const reviewed = off < 0 || (off === 0 && done > 0);  // reviews done win over the forecast, today included
       const v = reviewed ? done : future[off] || 0;
-      const fill = reviewed ? (v ? shade(v, PAST) : '#111a2e') : (v >= 0.5 ? shade(v, FUTURE) : '#111a2e');
+      const fill = reviewed ? (v ? shade(v, PAST) : 'var(--calendar-empty)') : (v >= 0.5 ? shade(v, FUTURE) : 'var(--calendar-empty)');
       cells.push(<rect key={off} x={left + w * step} y={top + d * step} width={cell} height={cell} rx={3} fill={fill}
-        stroke={off === 0 ? '#fff' : undefined} strokeWidth={1.5} data-off={off} data-v={v} data-r={reviewed ? 1 : 0} />);
+        stroke={off === 0 ? 'var(--calendar-today)' : undefined} strokeWidth={1.5} data-off={off} data-v={v} data-r={reviewed ? 1 : 0} />);
     }
   }
   const onMove = (e) => {
@@ -98,8 +98,8 @@ const Heatmap = ({ past, future }) => {
   return (
     <div ref={ref} onMouseMove={onMove} onMouseLeave={() => setTip(null)}>
       <svg viewBox={`0 0 ${left + weeks * step} ${top + 7 * step}`} className="block w-full h-auto" role="img" aria-label="Review heatmap">
-        {months.map(([w, m]) => <text key={w} x={left + w * step} y={11} fill="#55627a" fontSize={10}>{m}</text>)}
-        {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((l, d) => <text key={d} x={4} y={top + d * step + 10} fill="#55627a" fontSize={10}>{l}</text>)}
+        {months.map(([w, m]) => <text key={w} x={left + w * step} y={11} fill="rgb(var(--muted))" fontSize={10}>{m}</text>)}
+        {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((l, d) => <text key={d} x={4} y={top + d * step + 10} fill="rgb(var(--muted))" fontSize={10}>{l}</text>)}
         {cells}
       </svg>
       {tip && (
@@ -343,7 +343,7 @@ const FlashcardsView = ({ onTutor, onOpenWord, onAutoCreate }) => {
     <span key={i} data-i={back ? i : undefined}
       onClick={back ? (e) => { if (!swipe && id) { e.stopPropagation(); toggleWord(i); } } : undefined}
       className={`group/w relative px-1 rounded-lg transition-colors ${back && id ? 'cursor-pointer hover:bg-slate-800/60' : ''}
-        ${back && s.missed.has(i) ? 'text-rose-400 bg-rose-500/10' : id === card.target ? 'text-amber-300' : 'text-white'}`}>
+        ${back && s.missed.has(i) ? 'text-rose-400 bg-rose-500/10' : id === card.target ? 'text-amber-300' : 'text-ink'}`}>
       {diacTokens?.[i] ?? tok}
       {back && lemma && !s.busy && (
         <span dir="ltr" className={`${s.missed.has(i) ? '' : 'hidden group-hover/w:block'} absolute top-full left-1/2 -translate-x-1/2 mt-1 z-10 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-200 whitespace-nowrap shadow-xl font-sans leading-snug`}>
@@ -352,8 +352,8 @@ const FlashcardsView = ({ onTutor, onOpenWord, onAutoCreate }) => {
       )}
     </span>
   ));
-  const face = 'fc-face bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 rounded-3xl flex flex-col justify-center gap-5 px-4 md:px-8 pt-12 pb-8 ' + (swipe ? 'min-h-[420px]' : 'min-h-[360px]');
-  const sentenceClass = `font-arabic flex flex-wrap justify-center gap-x-3 gap-y-1 leading-[1.9] ${swipe ? 'text-[32px]' : 'text-4xl md:text-5xl'}`;
+  const face = 'fc-face bg-slate-900 border border-slate-700 rounded-2xl flex flex-col justify-center gap-5 px-4 md:px-8 pt-12 pb-8 ' + (swipe ? 'min-h-[420px]' : 'min-h-[360px]');
+  const sentenceClass = `font-arabic flex flex-wrap justify-center gap-x-3 gap-y-1 leading-[1.9] ${swipe ? 'text-[28px]' : 'text-[28px] md:text-[32px]'}`;
   const glossLine = target && <div className="text-center text-amber-300 text-lg min-h-[1.75rem]">{target[2]} · {firstSense(target[3])}</div>;
 
   const learning = data.learning;
@@ -376,13 +376,14 @@ const FlashcardsView = ({ onTutor, onOpenWord, onAutoCreate }) => {
         .fc-btn { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; min-width: 150px; padding: .75rem 1.1rem; border-width: 1px; border-radius: .75rem; transition: background-color .15s; }
       `}</style>
 
-      <header className="text-center mt-2 mb-9">
-        <h1 className="text-5xl md:text-7xl font-bold tracking-tight text-white tabular-nums">
+      <div className="mb-6"><h1 className="page-heading">Flashcards</h1><p className="page-description">Review your saved words and sentences.</p></div>
+      <header className="text-center bg-slate-900 border border-slate-700 rounded-2xl px-5 py-7 mb-6">
+        <h2 className="text-[24px] md:text-[28px] font-semibold tracking-tight text-ink tabular-nums">
           {remaining ? <><Tick value={remaining} /> {plural(remaining, 'card')} {s.practice ? 'to review' : 'due today'}</> : s.done ? 'All done for today' : 'No flashcards to review'}
-        </h1>
-        {left > 0 && <p className="mt-4 text-2xl md:text-3xl text-slate-400">You'll learn <Tick value={left} /> new {plural(left, 'word')}</p>}
+        </h2>
+        {left > 0 && <p className="mt-3 text-base leading-relaxed text-slate-400">You'll learn <Tick value={left} /> new {plural(left, 'word')}</p>}
         {!remaining && !s.practice && (
-          <p className="mt-4 text-2xl md:text-3xl text-slate-400">
+          <p className="mt-3 text-base leading-relaxed text-slate-400">
             {/* a span, not a <button>: buttons are always inline-block, so the phrase couldn't wrap like text */}
             <span role="button" tabIndex={0} onClick={onAutoCreate} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAutoCreate?.(); } }}
                   className="text-indigo-300 font-semibold cursor-pointer hover:underline">Automatically add comprehensible flashcards</span> on Atlas
@@ -391,9 +392,9 @@ const FlashcardsView = ({ onTutor, onOpenWord, onAutoCreate }) => {
       </header>
 
       {!cur && diacReady && (
-        <div className="flex flex-wrap justify-center gap-3 -mt-2 mb-10">
-          <button onClick={onTutor} className="fc-btn bg-indigo-600 hover:bg-indigo-500 border-indigo-600 text-white font-semibold">
-            <GraduationCap className="w-5 h-5" />Chat with your comprehensible tutor!
+        <div className="flex flex-wrap justify-center gap-3 mb-8">
+          <button onClick={onTutor} className="fc-btn bg-indigo-600 hover:bg-indigo-500 border-indigo-600 text-on-primary font-semibold">
+            <GraduationCap className="w-5 h-5" />Chat with your tutor
           </button>
           {data.states.length > 0 && practiceState !== 'none' && (
             <button onClick={startPractice} disabled={practiceState === 'loading'} className="fc-btn border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-60">
@@ -406,23 +407,24 @@ const FlashcardsView = ({ onTutor, onOpenWord, onAutoCreate }) => {
       {cur && !diacReady && <div className="flex justify-center py-24 text-indigo-400"><Loader className="w-8 h-8 animate-spin" aria-label="Loading" /></div>}
       {cur && diacReady && (
         <section className="max-w-3xl mx-auto mb-10 select-none">
+          <div className="state-legend mb-3">{target && <span><i className="legend-swatch legend-target" aria-hidden="true" />Target word</span>}{s.flipped && <span><i className="legend-swatch bg-rose-500" aria-hidden="true" />Rose: marked missed</span>}</div>
           <div className="h-[3px] bg-slate-800 rounded mb-2 overflow-hidden">
             <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${100 * s.done / (s.done + remaining)}%` }} />
           </div>
           <div className="flex items-center justify-between mb-2 text-slate-500">
             <span className="inline-flex items-center gap-1.5 text-sm" title="Flashcards for this word">
-              {target && <button onClick={() => onOpenWord?.(card.target)} title="Show on Atlas" className="font-arabic text-lg text-amber-300 leading-none mr-1 hover:underline" dir="rtl">{target[2]}</button>}
+              {target && <button onClick={() => onOpenWord?.(card.target)} title="Show on Atlas" aria-label="Show on Atlas" className="font-arabic text-lg text-amber-300 leading-none mr-1 hover:underline" dir="rtl">{target[2]}</button>}
               <Layers className="w-4 h-4" />{card.cards} {plural(card.cards, 'card')}
             </span>
             <div className="flex items-center gap-1">
               {!s.practice && (
                 <button onClick={deleteCard} onMouseLeave={() => setDeleteArmed(null)} title="Delete this card"
-                        className={`inline-flex items-center gap-1.5 p-1.5 rounded-md text-sm transition-colors ${deleteArmed === keyOf(card) ? 'bg-rose-600 text-white px-2.5' : 'hover:text-rose-400 hover:bg-slate-800'}`}>
+                        className={`inline-flex items-center gap-1.5 p-2.5 rounded-lg text-sm transition-colors ${deleteArmed === keyOf(card) ? 'bg-rose-600 text-white px-2.5' : 'hover:text-rose-400 hover:bg-slate-800'}`}>
                   <Trash2 className="w-4 h-4" />{deleteArmed === keyOf(card) && 'Delete?'}
                 </button>
               )}
-              <button onClick={() => onOpenWord?.(card.target)} title="More cards for this word" className="p-1.5 rounded-md hover:text-white hover:bg-slate-800"><BookPlus className="w-4 h-4" /></button>
-              {s.practice && <button onClick={stopPractice} title="Stop reviewing" aria-label="Stop reviewing" className="p-1.5 rounded-md hover:text-white hover:bg-slate-800"><X className="w-4 h-4" /></button>}
+              <button onClick={() => onOpenWord?.(card.target)} title="More cards for this word" aria-label="More cards for this word" className="p-2.5 rounded-lg hover:text-ink hover:bg-slate-800"><BookPlus className="w-4 h-4" /></button>
+              {s.practice && <button onClick={stopPractice} title="Stop reviewing" aria-label="Stop reviewing" className="p-2.5 rounded-lg hover:text-ink hover:bg-slate-800"><X className="w-4 h-4" /></button>}
             </div>
           </div>
           <div key={s.done} ref={cardRef} className={`fc-card relative ${s.done && s.enter ? 'fc-enter-' + s.enter : ''}`} style={{ perspective: 1400, touchAction: swipe ? 'pan-y' : undefined }}
@@ -446,13 +448,13 @@ const FlashcardsView = ({ onTutor, onOpenWord, onAutoCreate }) => {
           </div>
 
           {swipe ? (
-            <div className="flex justify-between items-center mt-4 mx-2 text-slate-600">
+            <div className="flex justify-between items-center mt-4 mx-2 text-slate-400">
               {s.flipped ? <><X className="w-6 h-6 text-rose-400" /><Check className="w-6 h-6 text-emerald-400" /></>
                 : <><span /><Eye className="w-6 h-6" /><span /></>}
             </div>
           ) : (
             <div className="flex gap-2.5 justify-center mt-5 flex-wrap">
-              {!s.flipped ? <button onClick={flip} title="Space" className="fc-btn bg-indigo-600 hover:bg-indigo-500 border-indigo-600 text-white font-semibold"><Eye className="w-5 h-5" />Reveal</button>
+              {!s.flipped ? <button onClick={flip} title="Space" className="fc-btn bg-indigo-600 hover:bg-indigo-500 border-indigo-600 text-on-primary font-semibold"><Eye className="w-5 h-5" />Reveal</button>
                 : <>
                   <button onClick={() => grade(false)} title="1 or ←" className="fc-btn border-rose-400/40 text-rose-400 hover:bg-rose-500/10"><X className="w-5 h-5" />Missed</button>
                   <button onClick={() => grade(true)} title="2 or →" className="fc-btn border-emerald-400/40 text-emerald-400 hover:bg-emerald-500/10"><Check className="w-5 h-5" />Correct</button>
@@ -465,20 +467,24 @@ const FlashcardsView = ({ onTutor, onOpenWord, onAutoCreate }) => {
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-4">
         <div className="flex justify-between items-center gap-3 flex-wrap mb-3">
-          <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400"><CalendarDays className="w-4 h-4" />Reviews</h2>
-          <label className="flex items-center gap-2.5 text-amber-300" title="New words per day">
-            <Sparkles className="w-4 h-4" />
+          <h2 className="flex items-center gap-2 text-base font-semibold text-slate-200"><CalendarDays className="w-4 h-4" />Reviews</h2>
+          <label className="flex flex-wrap items-center gap-2.5 text-amber-300" title="New words per day">
+            <Sparkles className="w-4 h-4 shrink-0" /><span className="text-xs sm:text-sm text-slate-300">New words per day</span>
             <input type="range" min="0" max="50" value={sliderNew} onChange={(e) => setDraftNew(+e.target.value)}
                    onPointerUp={(e) => commitNew(+e.target.value)} onKeyUp={(e) => commitNew(+e.target.value)} onBlur={(e) => commitNew(+e.target.value)}
-                   aria-label="New words per day" className="w-40 accent-amber-400" />
+                   aria-label="New words per day" className="w-24 sm:w-40 accent-amber-400" />
             <span className="min-w-[2ch] text-right font-bold text-slate-100 tabular-nums">{sliderNew}</span>
           </label>
         </div>
         <Heatmap past={{ ...data.history, [todayKey]: (data.history[todayKey] || 0) + doneSince }} future={heatFuture} />
+        <div className="state-legend mt-3" aria-label="Review calendar legend">
+          <span><i className="legend-swatch" style={{ background: 'var(--past-3)' }} aria-hidden="true" />Completed reviews</span>
+          <span><i className="legend-swatch" style={{ background: 'var(--future-3)' }} aria-hidden="true" />Forecast reviews</span>
+        </div>
         <div className="grid grid-cols-3 gap-3 mt-4">
           {[[`${stats.current} ${plural(stats.current, 'day')}`, 'current streak', true], [`${stats.longest} ${plural(stats.longest, 'day')}`, 'longest streak'], [(stats.total + doneSince).toLocaleString('en-US'), 'total reviews']].map(([v, label, flame]) => (
-            <div key={label} className="bg-slate-800/50 rounded-xl px-3 py-2.5">
-              <b className="flex items-center gap-1 text-lg text-slate-100 tabular-nums">{flame && <Flame className="w-4 h-4 text-amber-400" />}{v}</b>
+            <div key={label} className="bg-slate-800 rounded-xl px-3 py-3">
+              <b className="flex items-center gap-1 text-sm sm:text-lg whitespace-nowrap text-slate-100 tabular-nums">{flame && <Flame className="w-4 h-4 shrink-0 text-amber-400" />}{v}</b>
               <small className="text-slate-500 text-xs">{label}</small>
             </div>
           ))}
@@ -486,13 +492,13 @@ const FlashcardsView = ({ onTutor, onOpenWord, onAutoCreate }) => {
       </div>
 
       <label className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-4 flex items-center justify-between gap-4 cursor-pointer">
-        <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400"><WandSparkles className="w-4 h-4" />Suggested flashcards</span>
+        <span className="flex items-center gap-2 text-base font-semibold text-slate-200"><WandSparkles className="w-4 h-4" />Suggested flashcards</span>
         <input type="checkbox" checked={!!data.autoNew} onChange={(e) => setAutoNew(e.target.checked)} className="w-4 h-4 flex-none accent-indigo-500" />
       </label>
 
       {learning.length > 0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-          <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3"><Layers className="w-4 h-4" />Learning</h2>
+          <h2 className="flex items-center gap-2 text-base font-semibold text-slate-200 mb-3"><Layers className="w-4 h-4" />Learning</h2>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead><tr className="text-left text-xs text-slate-500 border-b border-slate-800">
@@ -506,7 +512,7 @@ const FlashcardsView = ({ onTutor, onOpenWord, onAutoCreate }) => {
                     <td className="py-2 px-2.5 font-mono text-xs text-slate-500">#{w.lemma_id}</td>
                     <td className="py-2 px-2.5 font-arabic text-xl" dir="rtl">{w.plaintext}</td>
                     <td className="py-2 px-2.5 text-slate-400">{firstSense(w.translation)}</td>
-                    <td className="py-2 px-2.5"><div className="w-[90px] h-1.5 rounded bg-slate-800 overflow-hidden"><div className="h-full" style={{ width: `${w.L * 100}%`, background: w.L >= KNOWN_AT ? '#34d399' : '#fbbf24' }} /></div></td>
+                    <td className="py-2 px-2.5"><div className="w-[90px] h-1.5 rounded bg-slate-800 overflow-hidden"><div className="h-full" style={{ width: `${w.L * 100}%`, background: w.L >= KNOWN_AT ? 'rgb(var(--known))' : 'rgb(var(--target))' }} /></div></td>
                     <td className={`py-2 px-2.5 text-right tabular-nums ${w.due <= 0 ? 'text-indigo-300' : ''}`}>{w.due <= 0 ? 'now' : 'in ' + days(w.due)}</td>
                     <td className="py-2 px-2.5 text-right tabular-nums text-slate-500">{w.reps}</td>
                     <td className="py-2 px-2.5">{w.lapses >= 4 && <span className="inline-flex items-center gap-1 text-xs text-amber-300" title={`Missed ${w.lapses} times`}><TriangleAlert className="w-3.5 h-3.5" />leech</span>}</td>

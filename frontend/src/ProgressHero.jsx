@@ -70,57 +70,57 @@ const ProgressHero = ({ states, occ, onCalibrate }) => {
   const reset = () => { setTrying(null); setTyped(''); };
 
   return (
-    <div className="relative">
+    <div className="relative bg-slate-900 border border-slate-700 rounded-2xl p-5 md:p-6">
     {/* laid out (invisibly) while loading, so nothing moves when it appears */}
     {!ready && <div className="absolute inset-0 grid place-items-center text-indigo-400"><Loader className="w-8 h-8 animate-spin" aria-label="Loading" /></div>}
     <section className={`text-center ${ready ? '' : 'invisible'}`} aria-hidden={!ready}>
-      <h1 className="text-5xl sm:text-7xl lg:text-[88px] leading-none font-bold tracking-tight text-white tabular-nums">
-        <small className="text-[.45em] font-semibold text-slate-400 tracking-normal">{trying === null ? 'You know' : 'If you knew'}</small>{' '}
+      <h1 className="text-4xl sm:text-5xl leading-tight font-bold tracking-tight text-ink tabular-nums">
+        <small className="text-[.5em] font-semibold text-slate-400 tracking-normal">{trying === null ? 'You know' : 'If you knew'}</small>{' '}
         {fmt(count)}{' '}
-        <small className="text-[.45em] font-semibold text-slate-400 tracking-normal">{count === 1 ? 'word' : 'words'}{trying === null ? '!' : '...'}</small>
+        <small className="text-[.5em] font-semibold text-slate-400 tracking-normal">{count === 1 ? 'word' : 'words'}{trying === null ? '!' : '...'}</small>
       </h1>
-      <p className="mt-4 text-xl sm:text-2xl md:text-[28px] text-slate-400 inline-flex items-center gap-2.5">
+      <p className="mt-2 text-sm sm:text-base text-slate-400 inline-flex items-center gap-2.5">
         {count === 0 && trying === null
           ? <span><button onClick={onCalibrate} className="text-indigo-300 font-semibold hover:underline">Calibrate</button> to get started!</span>
           : agePhrase(count)}
         <span tabIndex={0} aria-label="Sources"
-              className="relative group grid place-items-center w-[22px] h-[22px] rounded-full border-[1.5px] border-slate-600 text-slate-600 text-xs font-bold cursor-help hover:text-white hover:border-slate-400 focus:text-white focus:outline-none">
+              className="group grid shrink-0 place-items-center w-[22px] h-[22px] rounded-full border-[1.5px] border-slate-600 text-slate-400 text-xs font-bold cursor-help hover:text-ink hover:border-slate-400 focus:text-ink focus:outline-none">
           i
-          <span className="hidden group-hover:block group-focus:block absolute top-[140%] left-1/2 -translate-x-1/2 w-[min(360px,86vw)] z-30 text-left bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-3 text-[12.5px] leading-relaxed font-normal text-slate-400 shadow-2xl space-y-2">
+          <span className="hidden group-hover:block group-focus:block absolute top-24 left-1/2 -translate-x-1/2 w-[min(360px,86vw)] z-30 text-left bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-3 text-[12.5px] leading-relaxed font-normal text-slate-400 shadow-2xl space-y-2">
             {CITATIONS.map((c, i) => <span key={i} className="block">{c}</span>)}
           </span>
         </span>
       </p>
 
       {/* The age ruler is also the control: an invisible range input covers it */}
-      <div className="grid grid-cols-1 md:grid-cols-[180px_minmax(0,1fr)_180px] items-center gap-1.5 md:gap-4 max-w-[1060px] mx-auto mt-10">
-        <span className="hidden md:block" />
-        <div className="relative h-16" style={{ touchAction: 'none' }}>
+      <div className="grid grid-cols-1 lg:grid-cols-[180px_minmax(0,1fr)_180px] items-center gap-1.5 lg:gap-4 max-w-[1060px] mx-auto mt-3">
+        <span className="hidden lg:block" />
+        <div className="vocabulary-ruler relative h-14 mx-4" style={{ touchAction: 'none' }}>
           <div className="absolute inset-x-0 top-[22px] h-1.5 rounded bg-slate-800" />
-          <div className={`absolute left-0 top-[22px] h-1.5 rounded bg-gradient-to-r from-indigo-600 to-indigo-400 ${trying === null ? 'transition-all duration-300' : ''}`} style={{ width: `${x}%` }} />
+          <div className={`absolute left-0 top-[22px] h-1.5 rounded bg-indigo-500 ${trying === null ? 'transition-all duration-300' : ''}`} style={{ width: `${x}%` }} />
           {[2, 4, 6, 8, 10, 13, 18].map(a => (
-            <span key={a} className="absolute top-[34px] -translate-x-1/2 text-xs text-slate-600 tabular-nums pointer-events-none before:content-[''] before:absolute before:left-1/2 before:-top-3 before:w-0.5 before:h-1.5 before:bg-slate-600 before:rounded-sm" style={{ left: `${pos(a)}%` }}>{a}</span>
+            <span key={a} className="absolute top-[34px] -translate-x-1/2 text-xs text-slate-400 tabular-nums pointer-events-none before:content-[''] before:absolute before:left-1/2 before:-top-3 before:w-0.5 before:h-1.5 before:bg-slate-600 before:rounded-sm" style={{ left: `${pos(a)}%` }}>{a}</span>
           ))}
-          <div className={`absolute top-3 w-[26px] h-[26px] -ml-[13px] rounded-full bg-slate-100 shadow-[0_0_0_5px_rgba(129,140,248,.35)] pointer-events-none ${trying === null ? 'transition-all duration-300' : ''}`} style={{ left: `${x}%` }} />
+          <div className={`absolute top-3 w-[26px] h-[26px] -ml-[13px] rounded-full bg-primary shadow-[0_0_0_5px_rgb(var(--primary)/.18)] pointer-events-none ${trying === null ? 'transition-all duration-300' : ''}`} style={{ left: `${x}%` }} />
           <input type="range" min="0" max="1000" step="1" value={Math.round(x * 10)} aria-label="Try another vocabulary size"
                  onChange={(e) => tryCount(wordsFor(ageAt(+e.target.value / 10), model.n))}
                  className="absolute inset-y-0 -inset-x-[13px] w-[calc(100%+26px)] h-full m-0 opacity-0 cursor-pointer" />
         </div>
-        <div className={`flex items-center justify-center md:justify-start gap-2 ${trying === null ? 'invisible' : ''}`}>
+        <div className={`vocabulary-reset flex items-center justify-center lg:justify-start gap-2 ${trying === null ? 'invisible' : ''}`}>
           <input type="number" min="0" max={model.n} value={typed} aria-label="Words known"
                  onChange={(e) => { setTyped(e.target.value); if (e.target.value !== '') setTrying(Math.max(0, Math.min(model.n, Math.round(+e.target.value)))); }}
                  className="w-24 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-2 text-slate-100 font-semibold tabular-nums focus:border-indigo-400 focus:outline-none" />
-          <button onClick={reset} className="px-3 py-2 rounded-lg border border-slate-700 text-sm text-slate-400 hover:text-white hover:border-slate-500">Reset</button>
+          <button onClick={reset} className="px-3 py-2 rounded-lg border border-slate-700 text-sm text-slate-400 hover:text-ink hover:border-slate-500">Reset</button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 min-[520px]:grid-cols-2 max-w-[640px] mx-auto mt-8 gap-5 min-[520px]:gap-0">
+      <div className="grid grid-cols-2 max-w-[640px] mx-auto mt-3 gap-0 text-sm">
         <div className="px-3">
-          <b className="block text-4xl md:text-5xl font-bold tracking-tight text-white tabular-nums">{pct(model.cover(count))}</b>
+          <b className="block text-2xl md:text-3xl font-bold tracking-tight text-ink tabular-nums">{pct(model.cover(count))}</b>
           <span className="text-slate-400">of everyday Arabic text</span>
         </div>
-        <div className="px-3 pt-5 min-[520px]:pt-0 border-t min-[520px]:border-t-0 min-[520px]:border-l border-slate-800">
-          <b className="block text-4xl md:text-5xl font-bold tracking-tight text-white tabular-nums">{count < goal ? fmt(goal - count) : pct(count / model.n)}</b>
+        <div className="px-3 border-l border-slate-700">
+          <b className="block text-2xl md:text-3xl font-bold tracking-tight text-ink tabular-nums">{count < goal ? fmt(goal - count) : pct(count / model.n)}</b>
           <span className="text-slate-400">{count < goal ? 'words to 20% of the Arabic lexicon' : 'of the Arabic lexicon'}</span>
         </div>
       </div>
