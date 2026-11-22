@@ -3,6 +3,9 @@ import { SquarePen, SendHorizontal, Copy, Check, Languages, BookmarkPlus, Rotate
 import { InteractiveSentence } from './InteractiveSentence';
 
 const API_BASE = process.env.REACT_APP_API_URL || '';
+// [id sent as `model`, label]; the Jais ones run on the home PC (local-llm.md)
+const MODELS = [['gemini', 'Gemini'], ['jais-3-36b', 'Jais 3 36B'], ['jais-3-7b', 'Jais 3 7B']];
+const MODEL_KEY = 'tutorModel';
 
 const IconButton = ({ label, onClick, disabled, children }) => (
   <button
@@ -80,6 +83,9 @@ const TutorView = ({ onReply, onViewSentence }) => {
   const [waiting, setWaiting] = useState(false);
   const [error, setError] = useState(null);
   const [chatId, setChatId] = useState(0);
+  const [model, setModel] = useState(() => {
+    try { return localStorage.getItem(MODEL_KEY) || 'gemini'; } catch { return 'gemini'; }
+  });
   const chatRef = useRef(0); // responses from an abandoned chat are dropped
   const endRef = useRef(null);
 
@@ -93,6 +99,7 @@ const TutorView = ({ onReply, onViewSentence }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           scenario: currentScenario,
+          model,
           messages: history.map(({ role, text, arabic, english }) => ({ role, text, arabic, english }))
         })
       });
@@ -145,6 +152,17 @@ const TutorView = ({ onReply, onViewSentence }) => {
     <div className="h-[calc(100dvh-7rem)] md:h-[calc(100vh-4rem)] max-w-3xl mx-auto flex flex-col">
       <div className="flex items-center gap-4 pb-4 border-b border-slate-800">
         <p className="flex-1 text-sm italic text-slate-400 min-h-[1.25rem]">{scenario}</p>
+        <select
+          value={model}
+          onChange={(e) => {
+            setModel(e.target.value);
+            try { localStorage.setItem(MODEL_KEY, e.target.value); } catch {}
+          }}
+          aria-label="Model"
+          className="bg-slate-900 border border-slate-800 rounded-md px-2 py-1 text-sm text-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+        >
+          {MODELS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
         <IconButton label="New chat" onClick={() => setChatId(id => id + 1)}>
           <SquarePen className="w-5 h-5" />
         </IconButton>

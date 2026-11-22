@@ -25,6 +25,8 @@ tutor = Blueprint('tutor', __name__)
 # (chat completions URL, model, key variable); Gemini goes through its OpenAI-compatible endpoint
 OPENAI = ('https://api.openai.com/v1/chat/completions', 'gpt-5.4-mini', 'OPENAI_API_KEY')
 GEMINI = ('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', 'gemini-3.6-flash', 'GEMINI_API_KEY')
+# Jais 3 on the home PC (local-llm.md): one llama-server at LOCAL_LLM_URL, which loads whichever model is named
+LOCAL_MODELS = {'jais-3-36b', 'jais-3-7b'}
 NEW_WORD_CHOICES = 50
 MAX_ATTEMPTS = 3
 ARABIC = re.compile(r'[؀-ۿ]')
@@ -54,12 +56,22 @@ SETTINGS = ['a bus stop', 'a library', "a doctor's waiting room", 'a phone call 
             'a kitchen at home', 'a bookshop', 'a walk through the old town', 'a car repair shop', 'a museum', 'a wedding',
             'a beach', 'a job interview', 'a taxi', 'a neighbour at the door', 'a mosque courtyard after prayer']
 
-def ask_llm(messages):
-    gemini_key = os.getenv('GEMINI_API_KEY', '')
-    url, model, key_var = GEMINI if gemini_key and not gemini_key.startswith('your_') else OPENAI
+def ask_llm(messages, model=None):
+    """model: one of LOCAL_MODELS, otherwise Gemini (OpenAI when there's no Gemini key)."""
+    if model in LOCAL_MODELS:
+        url, key_var = os.getenv('LOCAL_LLM_URL'), 'LOCAL_LLM_KEY'
+        if not url:
+            raise RuntimeError('LOCAL_LLM_URL is not set')
+    else:
+        gemini_key = os.getenv('GEMINI_API_KEY', '')
+        url, model, key_var = GEMINI if gemini_key and not gemini_key.startswith('your_') else OPENAI
     body = {'model': model, 'messages': messages}
     if key_var == 'OPENAI_API_KEY':
         body['response_format'] = {'type': 'json_object'}
+    if key_var == 'LOCAL_LLM_KEY':
+        # ponytail: no thinking. At high effort the 36B took minutes per answer, past gunicorn's 120 s timeout;
+        # the Camelira check and rewrites below catch rule breaks instead. Try 'high' if replies get sloppy.
+        body['chat_template_kwargs'] = {'reasoning_effort': 'low'}
     req = urllib.request.Request(
         url, json.dumps(body).encode(),
         {'Content-Type': 'application/json', 'Authorization': f"Bearer {os.environ[key_var]}"}
@@ -68,7 +80,10 @@ def ask_llm(messages):
         with urllib.request.urlopen(req, timeout=90) as res:
             content = json.load(res)['choices'][0]['message']['content']
     except urllib.error.HTTPError as e:
-        err = json.load(e)
+        try:
+            err = json.load(e)
+        except ValueError:  # an HTML page, e.g. Cloudflare's 530 while the home PC is off
+            raise RuntimeError(f"LLM server returned HTTP {e.code}") from e
         err = err[0] if isinstance(err, list) else err  # Gemini wraps errors in a list
         raise RuntimeError(err['error']['message']) from e  # e.g. "You have no credits remaining..."
     # The JSON object, without any ```json fence around it (Gemini runs without JSON mode)
@@ -100,7 +115,7 @@ def check(arabic, known, new):
 
 @tutor.route('/api/tutor', methods=['POST'])
 def tutor_reply():
-    """Next tutor message. Body: {scenario, messages: [{role: 'tutor'|'user', arabic|text, english}]}; no messages = new chat."""
+    """Next tutor message. Body: {scenario, model, messages: [{role: 'tutor'|'user', arabic|text, english}]}; no messages = new chat."""
     data = request.get_json()
     history = data.get('messages', [])
 
@@ -127,7 +142,7 @@ def tutor_reply():
         best = None
         for attempt in range(MAX_ATTEMPTS):
             try:
-                reply = ask_llm(messages)
+                reply = ask_llm(messages, data.get('model'))
                 tokens, violations = check(reply['arabic'], known, new)
             except Exception:
                 if best:
